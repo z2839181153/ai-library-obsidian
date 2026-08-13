@@ -1,0 +1,21 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8800
+  },
+  "paths": {
+    "data_dir": "data",
+    "vault_dir": "vault"
+  },
+  "modelscope": {
+    "base_url": "https://api-inference.modelscope.cn/v1",
+    "chat_model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "distill_model": "ZhipuAI/GLM-5.2",
+    "embed_model": "Qwen/Qwen3-Embedding-0.6B"
+  },
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "enabled": false,
+    "model": "qwen2.5:7b"
+  }
+}
