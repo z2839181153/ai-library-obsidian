@@ -36,7 +36,11 @@ class Indexer:
         return files
 
     def run(self, root: Path, rebuild: bool = False) -> dict:
-        """索引目录下所有支持文件。返回统计信息。"""
+        """索引目录下所有支持文件。返回统计信息。
+
+        性能要点：所有待索引 chunk 的 embedding 跨书统一批量调用（避免逐书
+        单条请求，免费 API 单条 ~1s 而 64 条批量 <1s）。
+        """
         t0 = time.time()
         stats = {"scanned": 0, "new_or_changed": 0, "skipped": 0, "removed": 0, "failed": []}
 
@@ -46,7 +50,6 @@ class Indexer:
         if rebuild:
             self._reset()
 
-        # 现存书（按 content_hash 索引）
         existing: dict[str, dict] = {}
         for b in self.repo.all_books():
             if b["status"] != "deleted":
@@ -54,6 +57,8 @@ class Indexer:
 
         seen_hashes: set[str] = set()
         changed_book_ids: list[str] = []
+        # 待索引计划：(book_id, ingested, chunks)
+        pending: list[tuple[str, object, list[dict]]] = []
 
         for path in files:
             stats["skipped"] += 1  # 默认视为跳过，实际未跳过会覆盖
@@ -67,36 +72,64 @@ class Indexer:
             seen_hashes.add(ingested.content_hash)
             prev = self.repo.book_by_hash(ingested.content_hash)
             if prev and prev["book_id"] in existing:
-                # 内容未变且已有索引 chunks → 跳过
                 if self._has_chunks(prev["book_id"]):
                     continue
                 # 内容没变但缺 chunks（索引被清过）→ 补索引
-                self._index_book(prev["book_id"], ingested)
+                chunks = chunk_text(ingested.clean_text, prev["book_id"])
+                if chunks:
+                    pending.append((prev["book_id"], ingested, chunks))
+                    changed_book_ids.append(prev["book_id"])
                 stats["new_or_changed"] += 1
                 stats["skipped"] -= 1
-                changed_book_ids.append(prev["book_id"])
                 continue
 
             # 新增书
-            book = {
-                "book_id": ingested.book_id,
-                "title": ingested.title,
-                "author": ingested.author,
-                "slug": path.stem,
-                "media_type": ingested.media_type,
-                "source_uri": str(path),
-                "content_hash": ingested.content_hash,
-                "raw_path": str(ingested.raw_path),
-                "vault_path": "",
-                "card_path": "",
-                "status": "indexed",
-                "meta": json.dumps(ingested.meta, ensure_ascii=False),
-            }
-            self.repo.upsert_book(book)
-            self._index_book(ingested.book_id, ingested)
+            book_id = ingested.book_id
+            chunks = chunk_text(ingested.clean_text, book_id)
+            if chunks:
+                pending.append((book_id, ingested, chunks))
+                changed_book_ids.append(book_id)
             stats["new_or_changed"] += 1
             stats["skipped"] -= 1
-            changed_book_ids.append(ingested.book_id)
+
+        # 统一批量 embedding + 写入
+        if pending:
+            all_texts: list[str] = []
+            for _bid, _ing, chunks in pending:
+                all_texts.extend(c["content"] for c in chunks)
+            vecs = self.embed.embed_many(all_texts)
+
+            idx = 0
+            for book_id, ingested, chunks in pending:
+                self.repo.delete_chunks_by_book(book_id)
+                self.vec.delete_by_book(book_id)
+                book = {
+                    "book_id": book_id,
+                    "title": ingested.title,
+                    "author": ingested.author,
+                    "slug": Path(ingested.raw_path).stem,
+                    "media_type": ingested.media_type,
+                    "source_uri": str(ingested.raw_path),
+                    "content_hash": ingested.content_hash,
+                    "raw_path": str(ingested.raw_path),
+                    "vault_path": "",
+                    "card_path": "",
+                    "status": "indexed",
+                    "meta": json.dumps(ingested.meta, ensure_ascii=False),
+                }
+                self.repo.upsert_book(book)
+                rows: list[dict] = []
+                for chunk in chunks:
+                    chunk["token_cnt"] = len(chunk["content"])
+                    chunk["fts_content"] = tokenize(chunk["content"])
+                    chunk["vector_id"] = chunk["chunk_id"]
+                    self.repo.insert_chunk(chunk)
+                    rows.append(
+                        {"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vecs[idx]}
+                    )
+                    idx += 1
+                self.repo.commit()
+                self.vec.upsert(rows)
 
         # 文件消失 → 删除
         for book_id, book in existing.items():
