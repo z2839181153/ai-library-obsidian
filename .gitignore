@@ -1,0 +1,27 @@
+# ---- AI图书馆 项目根 .gitignore ----
+# 注意：公开仓库默认不包含个人知识库内容与本地数据
+
+# 本地数据（SQLite / LanceDB / 日志）
+data/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 个人知识库内容（vault 只放模板/占位，不放真实笔记）
+vault/
+!vault/README.md
+!vault/schema.md
+
+# 采购候选 / 对话归档 / 档案馆（可能含隐私）
+pending/
+conversations/
+archive/
+
+# 密钥与本地配置
+secrets.json
+*.secret
+.env
