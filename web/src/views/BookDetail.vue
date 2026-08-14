@@ -16,10 +16,26 @@ const error = ref('')
 const shelfForm = ref({ floor: '', room: '', shelf: '' })
 const distill = ref(null)      // status 信息
 const distillBusy = ref(false)
+const floors = ref([])         // 楼层下拉（P3 修复：避免自由文本填名称不匹配）
+const classifyBusy = ref(false)
+let classifyController = null
 
 const bookId = computed(() => route.params.id)
 
 onMounted(load)
+
+async function loadFloors() {
+  try {
+    const d = await api.floors()
+    floors.value = d.floors || []
+    // 建议楼层是 code（如 1F）；下拉选中对应项
+    const sf = book.value?.suggest_floor || ''
+    if (sf && !floors.value.some((f) => f.code === sf || f.name === sf)) {
+      // 建议的楼层不存在时保留文本，供用户手动确认
+      shelfForm.value.floor = sf
+    }
+  } catch { floors.value = [] }
+}
 
 async function load() {
   loading.value = true
@@ -36,6 +52,7 @@ async function load() {
     if (d.book.distill_status && d.book.distill_status !== 'idle') {
       try { distill.value = await api.distillStatus(bookId.value) } catch { /* ignore */ }
     }
+    await loadFloors()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -44,11 +61,28 @@ async function load() {
 }
 
 async function classify() {
+  if (classifyBusy.value) {
+    // 点击"取消"：中断进行中的分类请求
+    classifyController?.abort()
+    classifyController = null
+    classifyBusy.value = false
+    store.toast('已取消分类', 'info')
+    return
+  }
+  classifyBusy.value = true
+  classifyController = new AbortController()
   try {
-    await api.classify(bookId.value)
+    // LLM 分类可能较慢（含重试）；120s 超时 + 可取消
+    await api.classify(bookId.value, false, { signal: classifyController.signal, timeout: 120000 })
     store.toast('分类建议已生成', 'info')
     await load()
-  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  } catch (e) {
+    if (e.name === 'AbortError') store.toast('分类已取消/超时', 'info')
+    else store.toast(`❌ ${e.message}`, 'error')
+  } finally {
+    classifyController = null
+    classifyBusy.value = false
+  }
 }
 async function confirmShelve() {
   try {
@@ -100,10 +134,17 @@ const statusText = computed(() => ({
       <div class="card mb16">
         <h3 style="margin:0 0 8px">📍 分类与上架</h3>
         <div class="row wrap">
-          <label class="muted">楼层 <input type="text" v-model="shelfForm.floor" style="width:70px" /></label>
+          <label class="muted">楼层
+            <select v-model="shelfForm.floor" style="width:110px">
+              <option value="">（请选择）</option>
+              <option v-for="f in floors" :key="f.floor_id" :value="f.code">{{ f.name }}（{{ f.code }}）</option>
+            </select>
+          </label>
           <label class="muted">房间 <input type="text" v-model="shelfForm.room" style="width:140px" /></label>
           <label class="muted">书架 <input type="text" v-model="shelfForm.shelf" style="width:140px" /></label>
-          <button v-if="book.status !== 'shelved'" class="small primary" @click="classify">🔖 生成建议</button>
+          <button v-if="book.status !== 'shelved'" class="small primary" @click="classify">
+            {{ classifyBusy ? '✖ 取消' : '🔖 生成建议' }}
+          </button>
           <button v-if="book.status !== 'shelved'" class="small primary" @click="confirmShelve">✅ 确认上架</button>
           <span v-if="book.status === 'shelved'" class="muted">已上架：{{ book.vault_path }}</span>
         </div>

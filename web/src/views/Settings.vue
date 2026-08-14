@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import { useLibraryStore } from '../stores/library'
+import ModalDialog from '../components/ModalDialog.vue'
 
 const store = useLibraryStore()
 
@@ -17,6 +18,48 @@ const skillDetail = ref(null)
 
 // 蒸馏确认队列
 const distillQueue = ref([])
+
+// 自定义对话框状态（P3 修复：替换原生 prompt/confirm）
+const dialog = ref({
+  visible: false, title: '', message: '', inputLabel: '', inputValue: '',
+  textareaLabel: '', textareaValue: '', okText: '确认', danger: false,
+})
+let dialogCallback = null
+
+function openDialog(cfg, cb) {
+  dialog.value = { visible: true, ...cfg }
+  dialogCallback = cb
+}
+function onDialogConfirm(value) {
+  dialog.value.visible = false
+  dialogCallback && dialogCallback(value)
+}
+function onDialogCancel() {
+  dialog.value.visible = false
+  dialogCallback = null
+}
+
+// 内联编辑状态（楼层/房间改名）
+const editing = ref(null)      // { kind: 'floor'|'room', id, name }
+const editValue = ref('')
+function startEdit(kind, node) {
+  editing.value = { kind, id: node.floor_id || node.room_id || node.shelf_id, name: node.name }
+  editValue.value = node.name
+}
+function cancelEdit() { editing.value = null; editValue.value = '' }
+async function saveEdit() {
+  const name = editValue.value.trim()
+  const ed = editing.value
+  if (!ed || !name) { cancelEdit(); return }
+  try {
+    if (ed.kind === 'floor') await api.updateFloor(ed.id, { name })
+    else if (ed.kind === 'room') await api.updateRoom(ed.id, { name })
+    else await api.updateShelf(ed.id, { name })
+    store.toast('✅ 已改名', 'info')
+    await loadFloors()
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { cancelEdit() }
+}
 
 // 表单模型
 const form = ref({
@@ -78,38 +121,48 @@ const modeText = {
   manual: '全手动：所有写操作都需主人确认',
 }
 
-// ------- 楼层编辑 -------
-async function addFloor() {
-  const name = prompt('新楼层名称：')
-  if (!name) return
-  try { await api.createFloor({ name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
-}
-async function renameFloor(f) {
-  const name = prompt('楼层名称：', f.name)
-  if (!name || name === f.name) return
-  try { await api.updateFloor(f.floor_id, { name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+// ------- 楼层编辑（对话框 + 内联编辑，替代 prompt/confirm） -------
+function addFloor() {
+  openDialog({ title: '＋ 新建楼层', inputLabel: '新楼层名称：', okText: '创建' }, async (name) => {
+    if (!name) return
+    try { await api.createFloor({ name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
 async function delFloor(f) {
-  if (!confirm(`删除楼层 ${f.code} ${f.name}？（有书的楼层会被拒绝）`)) return
-  try { await api.deleteFloor(f.floor_id); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  openDialog({
+    title: '删除楼层', danger: true, okText: '确认删除',
+    message: `确定删除楼层 ${f.code} ${f.name}？（有书的楼层会被拒绝）`,
+  }, async () => {
+    try { await api.deleteFloor(f.floor_id); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
-async function addRoom(floor) {
-  const name = prompt(`在 ${floor.name} 新建房间：`)
-  if (!name) return
-  try { await api.createRoom({ floor_id: floor.floor_id, name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+function addRoom(floor) {
+  openDialog({ title: '＋ 新建房间', inputLabel: `在 ${floor.name} 新建房间：`, okText: '创建' }, async (name) => {
+    if (!name) return
+    try { await api.createRoom({ floor_id: floor.floor_id, name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
-async function addShelf(floor, room) {
-  const name = prompt(`在 ${room.name} 新建书架：`)
-  if (!name) return
-  try { await api.createShelf({ room_id: room.room_id, name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+function addShelf(floor, room) {
+  openDialog({ title: '＋ 新建书架', inputLabel: `在 ${room.name} 新建书架：`, okText: '创建' }, async (name) => {
+    if (!name) return
+    try { await api.createShelf({ room_id: room.room_id, name }); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
-async function delRoom(room) {
-  if (!confirm(`删除房间 ${room.name}？`)) return
-  try { await api.deleteRoom(room.room_id); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+function delRoom(room) {
+  openDialog({
+    title: '删除房间', danger: true, okText: '确认删除',
+    message: `确定删除房间 ${room.name}？`,
+  }, async () => {
+    try { await api.deleteRoom(room.room_id); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
-async function delShelf(shelf) {
-  if (!confirm(`删除书架 ${shelf.name}？`)) return
-  try { await api.deleteShelf(shelf.shelf_id); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+function delShelf(shelf) {
+  openDialog({
+    title: '删除书架', danger: true, okText: '确认删除',
+    message: `确定删除书架 ${shelf.name}？`,
+  }, async () => {
+    try { await api.deleteShelf(shelf.shelf_id); await loadFloors() } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
 
 // ------- 技能审阅 -------
@@ -119,10 +172,13 @@ async function openSkill(id) {
 async function approveSkill(id) {
   try { await api.approveSkill(id); store.toast('✅ 已批准', 'info'); await loadSkills(); skillDetail.value = null } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
 }
-async function rejectSkill(id) {
-  const reason = prompt('拒绝原因（可附改进建议）：')
-  if (reason === null) return
-  try { await api.rejectSkill(id, reason); store.toast('已拒绝', 'info'); await loadSkills(); skillDetail.value = null } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+function rejectSkill(id) {
+  openDialog({
+    title: '拒绝技能', textareaLabel: '拒绝原因（可附改进建议）：', okText: '提交拒绝', danger: true,
+  }, async (reason) => {
+    if (reason === null) return
+    try { await api.rejectSkill(id, reason); store.toast('已拒绝', 'info'); await loadSkills(); skillDetail.value = null } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  })
 }
 
 // ------- 蒸馏确认 -------
@@ -224,19 +280,45 @@ async function distillDecision(book, decision) {
         <div v-for="f in floors" :key="f.floor_id" class="mb16" style="border:1px solid var(--border);border-radius:10px;padding:10px">
           <div class="row">
             <b>{{ f.code }}</b>
-            <span class="grow">{{ f.name }}</span>
-            <button class="small" @click="renameFloor(f)">改名</button>
+            <template v-if="editing && editing.kind === 'floor' && editing.id === f.floor_id">
+              <input type="text" v-model="editValue" class="grow" style="width:180px"
+                     @keyup.enter="saveEdit" @keyup.esc="cancelEdit" autofocus />
+              <button class="small primary" @click="saveEdit">✓ 保存</button>
+              <button class="small" @click="cancelEdit">✗ 取消</button>
+            </template>
+            <template v-else>
+              <span class="grow">{{ f.name }}</span>
+              <button class="small" @click="startEdit('floor', f)">改名</button>
+            </template>
             <button class="small" @click="addRoom(f)">＋ 房间</button>
             <button class="small danger" @click="delFloor(f)">删除</button>
           </div>
           <div v-for="rm in (f.rooms || [])" :key="rm.room_id" style="margin-left:26px;margin-top:6px">
             <div class="row">
-              <span class="grow">📦 {{ rm.name }}</span>
+              <template v-if="editing && editing.kind === 'room' && editing.id === rm.room_id">
+                <input type="text" v-model="editValue" class="grow" style="width:180px"
+                       @keyup.enter="saveEdit" @keyup.esc="cancelEdit" autofocus />
+                <button class="small primary" @click="saveEdit">✓ 保存</button>
+                <button class="small" @click="cancelEdit">✗ 取消</button>
+              </template>
+              <template v-else>
+                <span class="grow">📦 {{ rm.name }}</span>
+                <button class="small" @click="startEdit('room', rm)">改名</button>
+              </template>
               <button class="small" @click="addShelf(f, rm)">＋ 书架</button>
               <button class="small danger" @click="delRoom(rm)">删除</button>
             </div>
             <div v-for="sh in (rm.shelves || [])" :key="sh.shelf_id" style="margin-left:26px;margin-top:4px" class="row">
-              <span class="grow muted">📚 {{ sh.name }}</span>
+              <template v-if="editing && editing.kind === 'shelf' && editing.id === sh.shelf_id">
+                <input type="text" v-model="editValue" class="grow" style="width:180px"
+                       @keyup.enter="saveEdit" @keyup.esc="cancelEdit" autofocus />
+                <button class="small primary" @click="saveEdit">✓ 保存</button>
+                <button class="small" @click="cancelEdit">✗ 取消</button>
+              </template>
+              <template v-else>
+                <span class="grow muted">📚 {{ sh.name }}</span>
+                <button class="small" @click="startEdit('shelf', sh)">改名</button>
+              </template>
               <button class="small danger" @click="delShelf(sh)">删除</button>
             </div>
           </div>
@@ -287,5 +369,20 @@ async function distillDecision(book, decision) {
         </div>
       </div>
     </template>
+
+    <!-- 自定义对话框（替代原生 prompt/confirm） -->
+    <ModalDialog
+      :visible="dialog.visible"
+      :title="dialog.title"
+      :message="dialog.message"
+      :input-label="dialog.inputLabel"
+      :input-value="dialog.inputValue"
+      :textarea-label="dialog.textareaLabel"
+      :textarea-value="dialog.textareaValue"
+      :ok-text="dialog.okText"
+      :danger="dialog.danger"
+      @confirm="onDialogConfirm"
+      @cancel="onDialogCancel"
+    />
   </div>
 </template>

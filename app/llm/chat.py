@@ -23,11 +23,28 @@ class LLMOutputError(Exception):
 
 
 class ChatClient:
-    def __init__(self, config: AppConfig, model: str | None = None, timeout: float = 60.0):
+    def __init__(self, config: AppConfig, model: str | None = None, timeout: float = 60.0,
+                 max_retries: int | None = None, retry_base: float | None = None,
+                 retry_max: float | None = None, retry_on_429: bool | None = None):
         self.cfg = config
         self.model = model or config.modelscope.chat_model
         self.timeout = timeout
+        # 重试参数可配（settings.json modelscope.chat_retries 等；429 默认不重试直接降级）
+        self.max_retries = max_retries if max_retries is not None else config.modelscope.chat_retries
+        self.retry_base = retry_base if retry_base is not None else config.modelscope.chat_retry_base
+        self.retry_max = retry_max if retry_max is not None else config.modelscope.chat_retry_max
+        self.retry_on_429 = retry_on_429 if retry_on_429 is not None else config.modelscope.chat_retry_on_429
         self._client = None
+
+    @staticmethod
+    def _is_fatal(e: Exception) -> bool:
+        """不可重试的错误码：鉴权失败/资源不存在/限流/余额不足。
+
+        ModelScope 免费 API 的 429（insufficient balance / rate limit）重试无意义，
+        立即降级让上层走无 LLM 路径，避免长时间挂起（P3 手工验收实测 50 分钟未返回）。
+        """
+        code = getattr(e, "status_code", None)
+        return code in (401, 403, 404, 429)
 
     @property
     def client(self):
@@ -50,11 +67,13 @@ class ChatClient:
         """普通对话补全，返回 assistant 文本。失败/空响应重试。
 
         ModelScope 免费 API 偶发空响应（choices=None，不抛异常）或限流——
-        显式检测并当作失败重试。间隔按 attempt 递增（3s→60s 上限），
-        最多 8 次：免费 API 忙碌时可能连续多次空响应，短间隔重试无效。
+        显式检测并当作失败重试。间隔按 attempt 递增（retry_base→retry_max 上限），
+        最多 max_retries 次（默认 8）：免费 API 忙碌时可能连续多次空响应，短间隔重试无效。
+        401/403/404/429 视为不可重试：429（余额不足/限流）重试无意义，立即抛
+        LLMUnavailable 让上层降级（除非 retry_on_429 显式开启）。
         """
         last_err: Exception | None = None
-        for attempt in range(8):
+        for attempt in range(self.max_retries + 1):
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model,
@@ -67,7 +86,14 @@ class ChatClient:
                 return resp.choices[0].message.content.strip()
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                time.sleep(min(3 * (attempt + 1), 60))
+                if self._is_fatal(e) and not self.retry_on_429:
+                    code = getattr(e, "status_code", None)
+                    raise LLMUnavailable(
+                        f"LLM 调用失败（HTTP {code}，不可重试，已降级）: {e}"
+                    ) from e
+                if attempt >= self.max_retries:
+                    break
+                time.sleep(min(self.retry_base * (attempt + 1), self.retry_max))
         raise LLMUnavailable(f"chat API 调用失败: {last_err}")
 
     def chat_json(self, prompt: str, system: str | None = None,

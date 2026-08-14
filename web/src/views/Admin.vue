@@ -15,6 +15,7 @@ const activeCv = ref(null)
 const messages = ref([])
 const input = ref('')
 const sending = ref(false)
+let askController = null
 
 const tab = ref('chat')        // chat | search | actions
 const searchQ = ref('')
@@ -44,19 +45,33 @@ async function send() {
   const q = input.value.trim()
   if (!q || sending.value) return
   sending.value = true
+  askController = new AbortController()
   messages.value.push({ role: 'user', content: q, refs: [] })
   input.value = ''
   scrollBottom()
   try {
-    const r = await api.ask(q, activeCv.value)
+    // 180s 超时 + 用户可取消（429 等 LLM 挂起场景可及时脱身）
+    const r = await api.ask(q, activeCv.value, 20, { signal: askController.signal, timeout: 180000 })
     activeCv.value = r.cv_id
     messages.value.push({ role: 'assistant', content: r.answer || '（空回答）', refs: r.refs || [] })
     await loadConvs()
   } catch (e) {
-    messages.value.push({ role: 'assistant', content: `❌ ${e.message}`, refs: [] })
+    if (e.name === 'AbortError') {
+      messages.value.push({ role: 'assistant', content: '（已取消/超时，未获得回答）', refs: [] })
+    } else {
+      messages.value.push({ role: 'assistant', content: `❌ ${e.message}`, refs: [] })
+    }
   } finally {
+    askController = null
     sending.value = false
     scrollBottom()
+  }
+}
+
+function cancelAsk() {
+  if (askController) {
+    askController.abort()
+    askController = null
   }
 }
 
@@ -155,7 +170,8 @@ const groupedConvs = computed(() => {
           <div class="row mt8">
             <input type="text" v-model="input" placeholder="提问（Enter 发送）"
                    @keyup.enter="send" :disabled="sending" />
-            <button class="primary" @click="send" :disabled="sending">发送</button>
+            <button v-if="!sending" class="primary" @click="send">发送</button>
+            <button v-else class="danger" @click="cancelAsk">✖ 取消</button>
           </div>
           <div class="row mt8">
             <button class="small" :disabled="!activeCv"

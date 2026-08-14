@@ -45,6 +45,10 @@ class ModelScopeConfig:
     chat_model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"
     distill_model: str = "ZhipuAI/GLM-5.2"
     embed_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    chat_retries: int = 8              # LLM 失败/空响应最大重试次数（可配）
+    chat_retry_base: float = 3.0       # 重试间隔基数（s）：3,6,12,... 递增
+    chat_retry_max: float = 60.0       # 重试间隔上限（s）
+    chat_retry_on_429: bool = False    # 429（限流/余额不足）默认不重试，立即降级
 
 
 @dataclass
@@ -93,6 +97,10 @@ class AppConfig:
         cfg.modelscope.chat_model = ms.get("chat_model", cfg.modelscope.chat_model)
         cfg.modelscope.distill_model = ms.get("distill_model", cfg.modelscope.distill_model)
         cfg.modelscope.embed_model = ms.get("embed_model", cfg.modelscope.embed_model)
+        cfg.modelscope.chat_retries = int(ms.get("chat_retries", cfg.modelscope.chat_retries))
+        cfg.modelscope.chat_retry_base = float(ms.get("chat_retry_base", cfg.modelscope.chat_retry_base))
+        cfg.modelscope.chat_retry_max = float(ms.get("chat_retry_max", cfg.modelscope.chat_retry_max))
+        cfg.modelscope.chat_retry_on_429 = bool(ms.get("chat_retry_on_429", cfg.modelscope.chat_retry_on_429))
 
         ol = raw.get("ollama", {})
         cfg.ollama.base_url = ol.get("base_url", cfg.ollama.base_url)

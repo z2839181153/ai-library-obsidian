@@ -176,6 +176,13 @@ class Repo:
         ).fetchone()
         return dict(row) if row else None
 
+    def floor_by_name(self, name: str) -> Optional[dict]:
+        """按楼层名称匹配（UI 下拉/自由输入都允许传名称）。"""
+        row = self.conn.execute(
+            "SELECT * FROM floors WHERE name=?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
     def insert_floor(self, floor: dict) -> None:
         now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
         with self._write_lock:

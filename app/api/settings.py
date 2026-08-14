@@ -61,6 +61,10 @@ def get_settings(req: Request) -> dict:
             "chat_model": cfg.modelscope.chat_model,
             "distill_model": cfg.modelscope.distill_model,
             "embed_model": cfg.modelscope.embed_model,
+            "chat_retries": cfg.modelscope.chat_retries,
+            "chat_retry_base": cfg.modelscope.chat_retry_base,
+            "chat_retry_max": cfg.modelscope.chat_retry_max,
+            "chat_retry_on_429": cfg.modelscope.chat_retry_on_429,
             "api_key_masked": _mask_key(cfg.modelscope.api_key),
             "api_key_set": bool(cfg.modelscope.api_key),
         },
@@ -98,6 +102,15 @@ def put_settings(req: Request, body: SettingsUpdate) -> dict:
             if v:
                 ms[k] = v
                 setattr(cfg.modelscope, k, v)
+        # LLM 重试参数可配（chat_retries/chat_retry_base/chat_retry_max/chat_retry_on_429）
+        for k in ("chat_retries", "chat_retry_base", "chat_retry_max"):
+            if k in body.modelscope and body.modelscope.get(k) is not None:
+                ms[k] = body.modelscope[k]
+                setattr(cfg.modelscope, k, float(body.modelscope[k]) if k != "chat_retries"
+                        else int(body.modelscope[k]))
+        if "chat_retry_on_429" in body.modelscope:
+            ms["chat_retry_on_429"] = bool(body.modelscope["chat_retry_on_429"])
+            cfg.modelscope.chat_retry_on_429 = ms["chat_retry_on_429"]
         # API key：空值=不改；非空写 data/secrets.json（不入 git）
         key = (body.modelscope.get("api_key") or "").strip()
         if key:

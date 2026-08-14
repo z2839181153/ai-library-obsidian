@@ -52,7 +52,12 @@ class Shelver:
         if not room_name:
             raise ValueError("缺少房间（room）")
 
-        floor_row = self.repo.floor_by_code(floor_code) or self.repo.get_floor(floor_code)
+        # 楼层匹配：code → floor_id → name（UI 自由输入名称也能命中）
+        floor_row = (
+            self.repo.floor_by_code(floor_code)
+            or self.repo.get_floor(floor_code)
+            or self.repo.floor_by_name(floor_code)
+        )
         if not floor_row:
             raise ValueError(f"楼层不存在: {floor_code}")
 

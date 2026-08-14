@@ -1,33 +1,48 @@
 // 后端 REST 封装（同源 /api；开发期 vite proxy 到 8800）
-async function request(method, url, body, isForm = false) {
-  const opts = { method, headers: {} }
-  if (body !== undefined) {
-    if (isForm || body instanceof FormData) {
-      opts.body = body
-    } else {
-      opts.headers['Content-Type'] = 'application/json'
-      opts.body = JSON.stringify(body)
+// opts: { timeout: ms（超时自动 abort）, signal: AbortSignal（外部取消） }
+async function request(method, url, body, isForm = false, opts = {}) {
+  const { timeout = 0, signal } = opts
+  const controller = new AbortController()
+  let timer = null
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  if (timeout > 0) {
+    timer = setTimeout(() => controller.abort(), timeout)
+  }
+  try {
+    const reqOpts = { method, headers: {}, signal: controller.signal }
+    if (body !== undefined) {
+      if (isForm || body instanceof FormData) {
+        reqOpts.body = body
+      } else {
+        reqOpts.headers['Content-Type'] = 'application/json'
+        reqOpts.body = JSON.stringify(body)
+      }
     }
+    const res = await fetch(url, reqOpts)
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        const j = await res.json()
+        detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+      } catch { /* ignore */ }
+      throw new Error(detail || `请求失败 (${res.status})`)
+    }
+    const ct = res.headers.get('content-type') || ''
+    return ct.includes('application/json') ? res.json() : res.text()
+  } finally {
+    if (timer) clearTimeout(timer)
   }
-  const res = await fetch(url, opts)
-  if (!res.ok) {
-    let detail = res.statusText
-    try {
-      const j = await res.json()
-      detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
-    } catch { /* ignore */ }
-    throw new Error(detail || `请求失败 (${res.status})`)
-  }
-  const ct = res.headers.get('content-type') || ''
-  return ct.includes('application/json') ? res.json() : res.text()
 }
 
 export const api = {
-  get: (url) => request('GET', url),
-  post: (url, body) => request('POST', url, body),
-  put: (url, body) => request('PUT', url, body),
-  del: (url) => request('DELETE', url),
-  upload: (url, formData) => request('POST', url, formData, true),
+  get: (url, opts) => request('GET', url, undefined, false, opts),
+  post: (url, body, opts) => request('POST', url, body, false, opts),
+  put: (url, body, opts) => request('PUT', url, body, false, opts),
+  del: (url, opts) => request('DELETE', url, undefined, false, opts),
+  upload: (url, formData, opts) => request('POST', url, formData, true, opts),
 
   // 快捷端点
   dashboard: () => request('GET', '/api/dashboard'),
@@ -40,10 +55,10 @@ export const api = {
   },
   book: (id) => request('GET', `/api/books/${id}`),
   bookContent: (id) => request('GET', `/api/books/${id}/content`),
-  classify: (id, force = false) => request('POST', `/api/books/${id}/classify`, { force }),
+  classify: (id, force = false, opts = {}) => request('POST', `/api/books/${id}/classify`, { force }, false, opts),
   confirmShelve: (id, pos = {}) => request('POST', `/api/books/${id}/confirm`, pos),
-  ask: (query, cvId = null, topK = 20) =>
-    request('POST', '/api/ask', { query, top_k: topK, cv_id: cvId }),
+  ask: (query, cvId = null, topK = 20, opts = {}) =>
+    request('POST', '/api/ask', { query, top_k: topK, cv_id: cvId }, false, opts),
   search: (query, topK = 20) => request('POST', '/api/search', { query, top_k: topK }),
   indexStatus: () => request('GET', '/api/index/status'),
   indexRun: (rebuild = false) => request('POST', '/api/index/run', { rebuild }),
