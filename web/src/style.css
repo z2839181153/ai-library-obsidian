@@ -166,6 +166,20 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
 .grid { display: grid; gap: 14px; }
 .grid-3 { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .grid-4 { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+/* P4-6：可折叠布局（窄屏单列，见下方 media query） */
+.grid-main { grid-template-columns: minmax(190px, 240px) 1fr; }
+.grid-half { grid-template-columns: 1fr 1fr; }
+
+/* P4-6 移动端适配：窄屏单列 / 导航换行 */
+@media (max-width: 820px) {
+  .content { padding: 12px; }
+  .topbar { flex-wrap: wrap; gap: 6px 10px; padding: 8px 12px; }
+  .topbar nav { flex-wrap: wrap; row-gap: 4px; }
+  .grid-3, .grid-4, .grid-main, .grid-half { grid-template-columns: 1fr !important; }
+  .chat-log { max-height: 55vh; min-height: 260px; }
+  .msg { max-width: 96%; }
+  .page-title { font-size: 1.25em; }
+}
 
 /* 书本卡片 */
 .book-card {

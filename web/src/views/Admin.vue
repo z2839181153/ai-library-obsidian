@@ -158,7 +158,7 @@ const groupedConvs = computed(() => {
     <h1 class="page-title">💬 管理员</h1>
     <p class="page-sub">与馆藏对话、搜索索引、操作账本</p>
 
-    <div class="grid" style="grid-template-columns: 260px 1fr; align-items:start">
+    <div class="grid grid-main" style="align-items:start">
       <!-- 左：对话历史 -->
       <div class="card" style="max-height:70vh;overflow-y:auto">
         <h3 style="margin:0 0 8px">🗂 对话历史</h3>

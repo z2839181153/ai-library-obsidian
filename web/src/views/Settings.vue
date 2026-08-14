@@ -320,7 +320,7 @@ onUnmounted(() => {
     <template v-if="tab === 'general'">
       <div class="card mb16">
         <h3 style="margin:0 0 8px">🔌 API 配置</h3>
-        <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="grid grid-half">
           <label class="muted">ModelScope base_url
             <input type="text" v-model="form.modelscope.base_url" />
           </label>
@@ -350,7 +350,7 @@ onUnmounted(() => {
 
       <div class="card mb16">
         <h3 style="margin:0 0 8px">📥 采集规则</h3>
-        <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="grid grid-half">
           <label class="muted">每日采购条数（配额）
             <input type="number" v-model.number="form.purchase.max_daily_purchase" min="1" max="20" />
           </label>
@@ -435,7 +435,7 @@ onUnmounted(() => {
 
     <!-- 技能审阅 -->
     <template v-else-if="tab === 'skills'">
-      <div class="grid" style="grid-template-columns: 1fr 1fr; align-items:start">
+      <div class="grid grid-half" style="align-items:start">
         <div class="card">
           <h3 style="margin:0 0 8px">🧪 待审阅技能（{{ skills.length }}）</h3>
           <div v-if="!skills.length" class="empty">没有待审阅的技能</div>
@@ -503,7 +503,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="grid" style="grid-template-columns: 1fr 1fr; align-items:start">
+        <div class="grid grid-half" style="align-items:start">
           <!-- 藏书分布饼图 -->
           <div class="card">
             <div class="row mb8">

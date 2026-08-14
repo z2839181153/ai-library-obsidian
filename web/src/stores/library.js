@@ -8,6 +8,8 @@ export const useLibraryStore = defineStore('library', {
     wsConnected: false,
     ws: null,
     wsListeners: [],
+    wsReconnectDelay: 1000,      // P4-6：指数退避重连（1s→2s→…→30s 上限）
+    wsMaxReconnectDelay: 30000,
     toasts: [],
     toastSeq: 0,
     pendingClassify: 0,
@@ -32,12 +34,17 @@ export const useLibraryStore = defineStore('library', {
         console.warn('WS 不可用', e)
         return null
       }
-      ws.onopen = () => { this.wsConnected = true }
+      ws.onopen = () => {
+        this.wsConnected = true
+        this.wsReconnectDelay = 1000   // 重连成功 → 退避重置
+      }
       ws.onclose = () => {
         this.wsConnected = false
         this.ws = null
-        // 5s 后重连（本地服务）
-        setTimeout(() => { if (!this.ws) this.connectWS() }, 5000)
+        // P4-6：指数退避重连（1s→2s→4s→…上限 30s），比固定 5s 更稳
+        const delay = this.wsReconnectDelay
+        this.wsReconnectDelay = Math.min(delay * 2, this.wsMaxReconnectDelay)
+        setTimeout(() => { if (!this.ws) this.connectWS() }, delay)
       }
       ws.onmessage = (ev) => {
         let msg

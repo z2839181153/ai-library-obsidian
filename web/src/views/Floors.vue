@@ -10,11 +10,26 @@ const router = useRouter()
 
 const floors = ref([])
 const books = ref([])
-const mode = ref('floor')       // floor | room | review（补书室）
+const mode = ref('floor')       // floor | room | review（补书室）| tags（标签书架）
 const activeFloor = ref(null)
 const activeRoom = ref(null)
 const loading = ref(false)
 const error = ref('')
+
+// 标签书架（P4-6）
+const tagBooks = ref([])        // shelved 全部书（含 tags）
+const activeTag = ref('')
+const tagAgg = computed(() => {
+  const m = {}
+  for (const b of tagBooks.value) {
+    for (const t of (b.tags || [])) m[t] = (m[t] || 0) + 1
+  }
+  return Object.entries(m).sort((a, b) => b[1] - a[1])
+})
+const visibleTagBooks = computed(() => {
+  if (!activeTag.value) return []
+  return tagBooks.value.filter((b) => (b.tags || []).includes(activeTag.value))
+})
 
 // 补书室两区
 const reviewBooks = ref([])     // status=reviewing（有建议）
@@ -79,6 +94,20 @@ function showReview() {
   mode.value = 'review'
   loadReviewRoom()
 }
+async function loadTagBooks() {
+  try {
+    const all = await api.books({ status: 'shelved' })
+    tagBooks.value = all.books
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+}
+function showTags() {
+  mode.value = 'tags'
+  activeTag.value = ''
+  if (!tagBooks.value.length) loadTagBooks()
+}
+function selectTag(tag) {
+  activeTag.value = activeTag.value === tag ? '' : tag
+}
 
 async function confirmBook(book, pos) {
   try {
@@ -105,13 +134,17 @@ async function classifyBook(book) {
     <h1 class="page-title">📖 楼层</h1>
     <p class="page-sub">按楼层浏览馆藏，或到补书室处理新书</p>
 
-    <div class="grid" style="grid-template-columns: 220px 1fr">
+    <div class="grid grid-main">
       <!-- 左：楼层列表 + 补书室 -->
       <div>
         <div class="floor-list">
           <div class="floor-item" :class="{ active: mode === 'review' }" @click="showReview()">
             <span>📥</span><span class="grow">补书室</span>
             <span class="badge red" v-if="reviewBooks.length + incomingBooks.length">{{ reviewBooks.length + incomingBooks.length }}</span>
+          </div>
+          <div class="floor-item" :class="{ active: mode === 'tags' }" @click="showTags()">
+            <span>🏷</span><span class="grow">标签书架</span>
+            <span class="badge" v-if="tagAgg.length">{{ tagAgg.length }}</span>
           </div>
           <div
             v-for="f in floors" :key="f.floor_id"
@@ -160,6 +193,26 @@ async function classifyBook(book) {
                 </div>
               </div>
             </div>
+          </div>
+        </template>
+
+        <!-- 标签书架（虚拟书架，P4-6） -->
+        <template v-else-if="mode === 'tags'">
+          <div class="card mb16">
+            <h3 style="margin:0 0 8px">🏷 标签书架（虚拟书架）</h3>
+            <p class="muted" style="margin:0 0 10px">按标签聚合馆藏书；点标签筛选，再点取消。</p>
+            <div v-if="!tagAgg.length" class="empty">还没有标签（书完成分类后自动生成）</div>
+            <div v-else class="row wrap" style="gap:8px">
+              <button v-for="[tag, n] in tagAgg" :key="tag" class="small"
+                      :class="{ primary: activeTag === tag }" @click="selectTag(tag)">
+                {{ tag }} <span class="badge">{{ n }}</span>
+              </button>
+            </div>
+          </div>
+          <div v-if="activeTag" class="mb8 muted">「{{ activeTag }}」共 {{ visibleTagBooks.length }} 本</div>
+          <div v-if="activeTag && !visibleTagBooks.length" class="empty">该标签下暂无书</div>
+          <div v-else-if="activeTag" class="grid grid-3">
+            <BookCard v-for="b in visibleTagBooks" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" />
           </div>
         </template>
 

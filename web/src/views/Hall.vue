@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLibraryStore } from '../stores/library'
 import { api } from '../api'
+import * as echarts from 'echarts'
 
 const store = useLibraryStore()
 const router = useRouter()
@@ -12,9 +13,55 @@ const uploadMsg = ref('')
 const d = computed(() => store.dashboard || {})
 const health = computed(() => d.value.health || {})
 const quota = computed(() => health.value.quota || {})
-const weekMax = computed(() => Math.max(1, ...(health.value.week || []).map((w) => w.count)))
 
-onMounted(() => store.refreshDashboard())
+const weekChartEl = ref(null)
+let weekChart = null
+
+onMounted(() => {
+  store.refreshDashboard()
+  window.addEventListener('resize', resizeChart)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', resizeChart)
+  if (weekChart) { weekChart.dispose(); weekChart = null }
+})
+
+// 数据到达后渲染折线图（P4-6）
+watch(() => health.value.week, renderWeekChart, { deep: true })
+
+function resizeChart() { if (weekChart) weekChart.resize() }
+
+function renderWeekChart() {
+  if (!weekChartEl.value) return
+  if (!weekChart) weekChart = echarts.init(weekChartEl.value)
+  const week = health.value.week || []
+  weekChart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 36, right: 16, top: 20, bottom: 28 },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: week.map((w) => w.date.slice(5)),
+    },
+    yAxis: { type: 'value', minInterval: 1 },
+    series: [{
+      name: '入馆数',
+      type: 'line',
+      smooth: true,
+      symbolSize: 7,
+      data: week.map((w) => w.count),
+      lineStyle: { color: '#3d5a45', width: 3 },
+      itemStyle: { color: '#3d5a45' },
+      areaStyle: { color: 'rgba(61,90,69,0.12)' },
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        data: [{ type: 'average', name: '均值' }],
+        lineStyle: { color: '#b98a2f', type: 'dashed' },
+      },
+    }],
+  }, true)
+}
 
 function onFile(e) {
   const file = e.target.files?.[0]
@@ -77,16 +124,10 @@ async function upload(file) {
     </div>
 
     <!-- 本周趋势 + 楼层鸟瞰 + 快捷操作 -->
-    <div class="grid" style="grid-template-columns: 1.2fr 1fr; align-items:start">
+    <div class="grid grid-half" style="align-items:start">
       <div class="card">
         <h3 style="margin:0 0 10px">📈 本周入馆趋势</h3>
-        <div class="row" style="gap:6px;align-items:flex-end;min-height:110px">
-          <div v-for="w in (health.week || [])" :key="w.date" style="flex:1;text-align:center">
-            <div style="font-size:0.75em;color:var(--ink-soft)">{{ w.count }}</div>
-            <div :style="{ height: Math.max(6, 70 * w.count / weekMax) + 'px', background: 'var(--accent)', borderRadius: '4px 4px 0 0' }"></div>
-            <div style="font-size:0.7em;color:var(--ink-soft)">{{ w.date.slice(5) }}</div>
-          </div>
-        </div>
+        <div ref="weekChartEl" style="width:100%;height:150px"></div>
       </div>
 
       <div class="card">

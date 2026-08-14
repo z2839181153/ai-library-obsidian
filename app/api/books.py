@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -22,8 +23,11 @@ class ConfirmRequest(BaseModel):
 @router.get("")
 def list_books(req: Request, status: str | None = None,
                floor: str | None = None, room: str | None = None,
-               q: str | None = None) -> dict:
-    """列书。status=reviewing 即补书室（建议区=有分类建议，待定区=无）。"""
+               q: str | None = None, tag: str | None = None) -> dict:
+    """列书。status=reviewing 即补书室（建议区=有分类建议，待定区=无）。
+
+    tag=xxx：虚拟书架按标签过滤（匹配 catalog_cards.tags / books.tags JSON 元素）。
+    """
     state = req.app.state.library
     sql = "SELECT * FROM books"
     conds, params = [], []
@@ -39,6 +43,13 @@ def list_books(req: Request, status: str | None = None,
     if q:
         conds.append("(title LIKE ? OR book_id LIKE ?)")
         params.extend([f"%{q}%", f"%{q}%"])
+    if tag:
+        # JSON 数组元素匹配（如 ["人工智能", "知识库"] → %"人工智能"%）
+        conds.append(
+            "(book_id IN (SELECT book_id FROM catalog_cards WHERE tags LIKE ?) "
+            "OR tags LIKE ?)"
+        )
+        params.extend([f'%"{tag}"%', f'%"{tag}"%'])
     if conds:
         sql += " WHERE " + " AND ".join(conds)
     sql += " ORDER BY updated_at DESC"
@@ -48,6 +59,17 @@ def list_books(req: Request, status: str | None = None,
     for r in rows:
         d = dict(r)
         card = state.repo.get_card(d["book_id"])
+        tags = []
+        if card and card.get("tags"):
+            try:
+                tags = json.loads(card["tags"] or "[]")
+            except json.JSONDecodeError:
+                tags = []
+        if not tags and d.get("tags"):
+            try:
+                tags = json.loads(d.get("tags") or "[]")
+            except json.JSONDecodeError:
+                tags = []
         books.append({
             "book_id": d["book_id"],
             "title": d["title"],
@@ -62,6 +84,7 @@ def list_books(req: Request, status: str | None = None,
             "private": bool(d.get("private")),
             "distill_value": card["distill_value"] if card else None,
             "has_card": card is not None,
+            "tags": tags,
             "updated_at": d.get("updated_at"),
         })
     return {"books": books, "count": len(books)}
