@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import actions, ask, books, floors, health, index
+from app.api import actions, ask, books, distill, floors, health, index, skills
 from app.config import AppConfig
 from app.state import build_state
 
@@ -47,6 +47,8 @@ app.include_router(books.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
 app.include_router(floors.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
+app.include_router(distill.router, prefix="/api")
+app.include_router(skills.router, prefix="/api")
 
 
 if __name__ == "__main__":

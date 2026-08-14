@@ -17,5 +17,13 @@
     "base_url": "http://127.0.0.1:11434",
     "enabled": false,
     "model": "qwen2.5:7b"
+  },
+  "distill": {
+    "cangjie_skill_dir": "C:\\Users\\Z\\.qwenpaw\\workspaces\\yh7ECT\\skills\\cangjie-skill",
+    "max_chunk_chars": 6000,
+    "max_skill_chars": 8000,
+    "route_threshold": 0.6,
+    "route_top_k": 5,
+    "reject_block": 5
   }
 }

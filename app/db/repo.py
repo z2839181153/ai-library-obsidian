@@ -63,6 +63,21 @@ class Repo:
         ).fetchone()
         return dict(row) if row else None
 
+    def update_book_fields(self, book_id: str, fields: dict) -> None:
+        """部分更新 books 行；自动刷新 updated_at。"""
+        fields = dict(fields)
+        fields.pop("book_id", None)
+        if not fields:
+            return
+        fields["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE books SET {sets} WHERE book_id=?",
+                list(fields.values()) + [book_id],
+            )
+            self.conn.commit()
+
     def all_books(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM books")]
 
@@ -329,5 +344,104 @@ class Repo:
         with self._write_lock:
             self.conn.execute(
                 "UPDATE actions SET status=? WHERE act_id=?", (status, act_id)
+            )
+            self.conn.commit()
+
+    # ---------- P2: skills（蒸馏产物注册表） ----------
+
+    def upsert_skill(self, skill: dict) -> str:
+        """写入技能记录；skill_id 缺省时生成 sk_*。返回 skill_id。"""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        skill = dict(skill)
+        skill_id = skill.get("skill_id") or new_id("sk")
+        skill["skill_id"] = skill_id
+        skill.setdefault("status", "draft")
+        skill.setdefault("reject_count", 0)
+        skill.setdefault("created_at", now)
+        skill["updated_at"] = now
+        cols = ", ".join(skill.keys())
+        marks = ", ".join("?" for _ in skill)
+        with self._write_lock:
+            self.conn.execute(
+                f"INSERT OR REPLACE INTO skills ({cols}) VALUES ({marks})",
+                list(skill.values()),
+            )
+            self.conn.commit()
+        return skill_id
+
+    def get_skill(self, skill_id: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM skills WHERE skill_id=?", (skill_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_skills(self, status: Optional[str] = None,
+                    book_id: Optional[str] = None) -> list[dict]:
+        sql = "SELECT * FROM skills"
+        conds, params = [], []
+        if status:
+            conds.append("status=?")
+            params.append(status)
+        if book_id:
+            conds.append("book_id=?")
+            params.append(book_id)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY updated_at DESC"
+        rows = self.conn.execute(sql, params)
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("test_prompts"):
+                try:
+                    d["test_prompts"] = json.loads(d["test_prompts"])
+                except json.JSONDecodeError:
+                    pass
+            out.append(d)
+        return out
+
+    def update_skill(self, skill_id: str, fields: dict) -> None:
+        """部分更新 skills 行；自动刷新 updated_at。"""
+        fields = dict(fields)
+        fields.pop("skill_id", None)
+        if not fields:
+            return
+        fields["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE skills SET {sets} WHERE skill_id=?",
+                list(fields.values()) + [skill_id],
+            )
+            self.conn.commit()
+
+    def set_skill_status(self, skill_id: str, status: str) -> None:
+        self.update_skill(skill_id, {"status": status})
+
+    def bump_skill_reject(self, skill_id: str, reason: str) -> int:
+        """拒绝一次：reject_count+1，记录原因。返回新计数。"""
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE skills SET reject_count = reject_count + 1, "
+                "last_reject_reason=?, updated_at=? WHERE skill_id=?",
+                (reason, time.strftime("%Y-%m-%dT%H:%M:%S+08:00"), skill_id),
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT reject_count FROM skills WHERE skill_id=?", (skill_id,)
+            ).fetchone()
+            return int(row["reject_count"]) if row else 0
+
+    def reset_skill_reject(self, skill_id: str) -> None:
+        self.update_skill(skill_id, {"reject_count": 0, "last_reject_reason": ""})
+
+    # ---------- P2: catalog_cards.skills 回填 ----------
+
+    def set_card_skills(self, book_id: str, skills: list[dict]) -> None:
+        """把书关联技能列表写进卡片（JSON [{skill_id, name, status}]）。"""
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE catalog_cards SET skills=? WHERE book_id=?",
+                (json.dumps(skills, ensure_ascii=False), book_id),
             )
             self.conn.commit()

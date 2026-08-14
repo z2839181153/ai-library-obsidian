@@ -55,11 +55,25 @@ class OllamaConfig:
 
 
 @dataclass
+class DistillConfig:
+    cangjie_skill_dir: Path = ROOT_DIR / "skills" / "cangjie-skill"  # prompt/模板单一事实源
+    max_chunk_chars: int = 6000          # 单次喂给 extractor 的正文分块上限
+    max_skill_chars: int = 8000          # 问答注入 SKILL.md 的截断上限
+    route_threshold: float = 0.6         # 技能路由命中余弦阈值（cos 越大越近，≥0.6 命中）
+    route_top_k: int = 5                 # 路由候选数
+    reject_block: int = 5                # 连续拒绝 ≥5 自动阻塞
+
+    def __post_init__(self) -> None:
+        self.cangjie_skill_dir = Path(self.cangjie_skill_dir)
+
+
+@dataclass
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     modelscope: ModelScopeConfig = field(default_factory=ModelScopeConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    distill: DistillConfig = field(default_factory=DistillConfig)
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "AppConfig":
@@ -84,6 +98,14 @@ class AppConfig:
         cfg.ollama.base_url = ol.get("base_url", cfg.ollama.base_url)
         cfg.ollama.enabled = bool(ol.get("enabled", cfg.ollama.enabled))
         cfg.ollama.model = ol.get("model", cfg.ollama.model)
+
+        ds = raw.get("distill", {})
+        cfg.distill.cangjie_skill_dir = Path(ds.get("cangjie_skill_dir", str(cfg.distill.cangjie_skill_dir)))
+        cfg.distill.max_chunk_chars = int(ds.get("max_chunk_chars", cfg.distill.max_chunk_chars))
+        cfg.distill.max_skill_chars = int(ds.get("max_skill_chars", cfg.distill.max_skill_chars))
+        cfg.distill.route_threshold = float(ds.get("route_threshold", cfg.distill.route_threshold))
+        cfg.distill.route_top_k = int(ds.get("route_top_k", cfg.distill.route_top_k))
+        cfg.distill.reject_block = int(ds.get("reject_block", cfg.distill.reject_block))
 
         # 密钥：环境变量优先，其次 data/secrets.json（不入库）
         cfg.modelscope.api_key = os.environ.get(

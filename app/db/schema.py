@@ -2,6 +2,7 @@
 
 - P0 实现：books / chunks / chunks_fts(FTS5) / index_state / embedding_cache
 - P1 实现：floors / rooms / shelves / catalog_cards / actions / conversations / messages
+- P2 实现：skills（蒸馏产物注册表）
 """
 from __future__ import annotations
 
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS books (
   private     INTEGER DEFAULT 0,
   tags        TEXT,
   meta        TEXT,
+  distill_slug TEXT,                -- P2: vault/skills/<slug> 蒸馏产物根
+  distill_status TEXT,              -- P2: idle|running|awaiting|done|failed|blocked
   created_at  TEXT,
   updated_at  TEXT
 );
@@ -142,6 +145,24 @@ CREATE TABLE IF NOT EXISTS messages (
   private       INTEGER DEFAULT 0,
   created_at    TEXT
 );
+
+-- ---------- P2：蒸馏产物注册表（设计文档 §5.3 skills 表） ----------
+CREATE TABLE IF NOT EXISTS skills (
+  skill_id     TEXT PRIMARY KEY,      -- sk_*
+  book_id      TEXT REFERENCES books(book_id),
+  name         TEXT NOT NULL,
+  slug         TEXT,
+  path         TEXT,                  -- skills/<book-slug>/<skill-slug>/SKILL.md
+  description  TEXT,                  -- trigger 条件（进向量索引做路由）
+  status       TEXT DEFAULT 'draft',
+               -- draft|reviewing|approved|rejected|installed|blocked
+  reject_count INTEGER DEFAULT 0,     -- 连续拒绝次数（≥5 自动阻塞）
+  last_reject_reason TEXT,
+  test_prompts TEXT,                  -- JSON（darwin 兼容）
+  created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_skills_book ON skills(book_id);
+CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
 """
 
 # 默认 4 个内置楼层（设计文档 §5.2；仅当 floors 表为空时种子插入）
@@ -210,6 +231,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
     cols = [r[1] for r in conn.execute("PRAGMA table_info(chunks)")]
     if "fts_content" not in cols:
         conn.execute("ALTER TABLE chunks ADD COLUMN fts_content TEXT")
+
+    # 旧库迁移（P2）：books 补蒸馏字段
+    bcols = [r[1] for r in conn.execute("PRAGMA table_info(books)")]
+    if "distill_slug" not in bcols:
+        conn.execute("ALTER TABLE books ADD COLUMN distill_slug TEXT")
+    if "distill_status" not in bcols:
+        conn.execute("ALTER TABLE books ADD COLUMN distill_status TEXT")
 
     # 默认楼层种子（幂等）
     seed_default_floors(conn)

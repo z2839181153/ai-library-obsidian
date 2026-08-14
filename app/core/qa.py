@@ -1,13 +1,14 @@
-"""基础问答（设计文档 §6.5 前四步，P1 范围）。
+"""基础问答（设计文档 §6.5 前四步，P1 + P2 技能路由）。
 
 流程：
 1. 定位：混合检索（searcher）→ 命中 1-3 本书
 2. 概览：组装书级上下文（卡片摘要 + 命中 chunk 片段）
-3. 作答：LLM 生成回答，要求带 [[catalog/bk_<id>]] 引用
-4. 返回：{answer, refs}
+3. 技能路由（P2）：问题 embedding → 技能库检索 → 命中注入 SKILL.md 到 system prompt
+4. 作答：LLM 生成回答，要求带 [[catalog/bk_<id>]] 引用
+5. 返回：{answer, refs, used_skills}
 
 无 API key → answer=None + 降级说明，refs 仍返回（可读原文定位）。
-技能路由（§6.5 ③）与方向池沉淀（⑥）留 P2。
+方向池沉淀（⑥）留后续。
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import json
 from app.db.repo import Repo
 from app.llm.chat import ChatClient, LLMUnavailable
 from app.retrieval.searcher import Searcher
+from app.router.skill_router import SkillRouter
 
 _QA_SYSTEM = (
     "你是 AI 图书馆的管理员。根据提供的馆藏资料回答问题。"
@@ -29,10 +31,12 @@ _CHUNK_CHARS = 400
 
 
 class QAService:
-    def __init__(self, repo: Repo, searcher: Searcher, llm: ChatClient):
+    def __init__(self, repo: Repo, searcher: Searcher, llm: ChatClient,
+                 router: SkillRouter | None = None):
         self.repo = repo
         self.searcher = searcher
         self.llm = llm
+        self.router = router
 
     def ask(self, query: str, top_k: int = 20) -> dict:
         result = self.searcher.search(query, top_k=top_k)
@@ -60,15 +64,29 @@ class QAService:
                 "answer": "馆内暂无相关内容。",
                 "refs": [],
                 "books": [],
+                "used_skills": [],
                 "model_unavailable": False,
             }
+
+        # ③ 技能路由（P2）：命中注入 SKILL.md
+        used_skills = []
+        system = _QA_SYSTEM
+        if self.router is not None:
+            routed = self.router.retrieve(query)
+            hint = self.router.build_system_hint(routed)
+            if hint:
+                system = _QA_SYSTEM + "\n\n" + hint
+                used_skills = [
+                    {"skill_id": s["skill_id"], "name": s["name"]}
+                    for s in routed.get("skills", [])
+                ]
 
         context = self._build_context(books)
         answer = None
         model_unavailable = False
         try:
             answer = self.llm.chat([
-                {"role": "system", "content": _QA_SYSTEM},
+                {"role": "system", "content": system},
                 {"role": "user", "content": f"问题：{query}\n\n馆藏资料：\n{context}"},
             ])
         except LLMUnavailable:
@@ -80,6 +98,7 @@ class QAService:
             "answer": answer,
             "refs": refs,
             "books": [{"book_id": r["book_id"], "title": r["title"], "status": r["status"]} for r in refs],
+            "used_skills": used_skills,
             "model_unavailable": model_unavailable,
         }
 
