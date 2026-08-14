@@ -1,6 +1,8 @@
 """书 API：列表/详情/补书室/分类建议/确认上架/原文阅读（设计文档 §9.2）。"""
 from __future__ import annotations
 
+import concurrent.futures
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -140,6 +142,176 @@ def delete_book(req: Request, book_id: str) -> dict:
         "reason": f"主人删除《{book.get('title', book_id)}》（可恢复 30 天）",
     })
     return {"ok": True, "book": deleted}
+
+
+# ---------- P4-3 阅览室联动：相关技能 / 相关笔记 ----------
+
+def _book_room(book: dict) -> str:
+    """从 vault_path（books/<楼层>/<房间>/<书架>/<书名>）第二段取房间；未上架用建议房间。"""
+    vp = book.get("vault_path") or ""
+    if vp:
+        parts = vp.split("/")
+        if len(parts) >= 3 and parts[2]:
+            return parts[2]
+    return book.get("suggest_room") or ""
+
+
+def _escape_like(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _with_timeout(fn, timeout: float = 5.0):
+    """在后台线程执行 fn，超时返回 None（线程继续跑完，不阻塞请求）。
+
+    用于 related 的 embedding/混合检索：无 key 或 API 慢（如 ModelScope 429）
+    时降级跳过相似部分，同房间/同书结果立即返回。
+    """
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
+    try:
+        return fut.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        return None
+    except Exception:  # noqa: BLE001  调用失败同样降级
+        return None
+    finally:
+        ex.shutdown(wait=False)
+
+
+def _books_in_room(state, room: str, exclude: str) -> list[dict]:
+    """同房间（vault_path 段匹配 或 建议房间相同）的非删除书，排除 exclude。"""
+    esc = _escape_like(room)
+    rows = state.repo.conn.execute(
+        "SELECT * FROM books "
+        "WHERE status != 'deleted' AND book_id != ? "
+        "AND (vault_path LIKE ? ESCAPE '\\' OR suggest_room = ?) "
+        "ORDER BY updated_at DESC",
+        (exclude, f"%/{esc}/%", room),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _skill_dto(s: dict, book_title: str, relation: str,
+               similarity: float | None = None) -> dict:
+    return {
+        "skill_id": s["skill_id"],
+        "name": s.get("name") or s["skill_id"],
+        "slug": s.get("slug") or "",
+        "status": s.get("status"),
+        "description": s.get("description") or "",
+        "book_id": s.get("book_id") or "",
+        "book_title": book_title,
+        "relation": relation,
+        "similarity": similarity,
+    }
+
+
+@router.get("/{book_id}/related")
+def related(req: Request, book_id: str, top_n: int = 6) -> dict:
+    """P4-3 阅览室右侧面板：相关技能（同书蒸馏/同房间/描述相似）+ 相关笔记（同房间/向量相似）。
+
+    全部只读、本地计算；embedding / 技能索引不可用时静默降级（同房间仍返回）。
+    """
+    state = req.app.state.library
+    book = state.repo.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="书不存在")
+
+    room = _book_room(book)
+    card = state.repo.get_card(book_id)
+    # 检索 query：标题 + 卡片摘要（无卡片仅标题）
+    query_text = " ".join(
+        p for p in (book.get("title") or "", (card or {}).get("summary") or "") if p
+    ) or book_id
+
+    active_status = ("draft", "reviewing", "approved", "installed")
+
+    # ---------- 相关技能 ----------
+    skills: list[dict] = []
+    seen_skills: set[str] = set()
+
+    def _add_skill(s: dict, relation: str, similarity: float | None = None) -> None:
+        if not s or s["skill_id"] in seen_skills or s.get("status") not in active_status:
+            return
+        seen_skills.add(s["skill_id"])
+        b = state.repo.get_book(s.get("book_id")) if s.get("book_id") else None
+        skills.append(_skill_dto(s, (b or {}).get("title") or "", relation, similarity))
+
+    # 1a 同书蒸馏技能
+    for s in state.repo.list_skills(book_id=book_id):
+        _add_skill(s, "same_book")
+    # 1b 同房间其他书的技能
+    if room:
+        for b in _books_in_room(state, room, exclude=book_id):
+            for s in state.repo.list_skills(book_id=b["book_id"]):
+                _add_skill(s, "same_room")
+    # 1c/2b 共用 embedding 探测：3s 超时 → 降级为纯词法（跳过技能向量相似）
+    qvec = _with_timeout(lambda: state.embed.embed_one(query_text), timeout=3.0)
+
+    if qvec is not None:
+        # 1c 描述相似（技能库向量余弦；索引缺失时静默跳过）
+        try:
+            for h in state.skill_index.search(qvec, top_k=top_n * 2):
+                _add_skill(state.repo.get_skill(h["skill_id"]), "similar",
+                           similarity=round(h["_distance"], 3))
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---------- 相关笔记 ----------
+    notes: list[dict] = []
+    seen_notes: set[str] = set()
+
+    def _add_note(b: dict, relation: str, score: float | None = None,
+                  section: str = "", snippet: str = "") -> None:
+        if not b or b["book_id"] in seen_notes:
+            return
+        seen_notes.add(b["book_id"])
+        notes.append({
+            "book_id": b["book_id"],
+            "title": b.get("title") or b["book_id"],
+            "status": b.get("status"),
+            "vault_path": b.get("vault_path") or "",
+            "relation": relation,
+            "score": score,
+            "section": section,
+            "snippet": snippet,
+        })
+
+    # 2a 同房间书
+    if room:
+        for b in _books_in_room(state, room, exclude=book_id):
+            _add_note(b, "same_room")
+    # 2b 向量相似 chunk：embedding 可用 → 混合检索；否则纯词法（均 3s 超时兜底）
+    if qvec is not None:
+        res = _with_timeout(lambda: state.searcher.search(query_text, top_k=top_n * 3),
+                            timeout=3.0)
+    else:
+        res = _with_timeout(lambda: state.searcher.search_lexical(query_text, top_k=top_n * 3),
+                            timeout=3.0)
+    if res:
+        for item in res["books"]:
+            if item["book_id"] == book_id:
+                continue
+            b = state.repo.get_book(item["book_id"])
+            if b is None or b.get("status") == "deleted":
+                continue
+            chunk = (item.get("hit_chunks") or [{}])[0]
+            _add_note(b, "similar", score=item.get("score"),
+                      section=chunk.get("section") or "",
+                      snippet=(chunk.get("content") or "")[:160])
+
+    # 排序：同房间优先，相似按分数降序；技能同书 > 同房间 > 相似
+    rel_rank = {"same_room": 0, "similar": 1}
+    notes.sort(key=lambda x: (rel_rank.get(x["relation"], 9), -(x["score"] or 0)))
+    sk_rank = {"same_book": 0, "same_room": 1, "similar": 2}
+    skills.sort(key=lambda x: (sk_rank.get(x["relation"], 9), -(x.get("similarity") or 0)))
+
+    return {
+        "book_id": book_id,
+        "room": room,
+        "skills": skills[:top_n],
+        "notes": notes[:top_n],
+    }
 
 
 @router.get("/{book_id}/content")

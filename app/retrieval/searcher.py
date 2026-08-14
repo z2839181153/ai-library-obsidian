@@ -37,22 +37,7 @@ class Searcher:
         """混合检索。book_ids 过滤（可选）。"""
         # 1) 词法路
         match_expr = query_to_match(query)
-        lexical: list[str] = []
-        if match_expr.strip():
-            sql = (
-                "SELECT c.rowid, c.chunk_id, c.book_id, c.section, c.content "
-                "FROM chunks_fts f JOIN chunks c ON c.rowid = f.rowid "
-                "WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?"
-            )
-            params: list = [match_expr, max(top_k * 3, 30)]
-            if book_ids:
-                ph = ",".join("?" for _ in book_ids)
-                sql += f" AND c.book_id IN ({ph})"
-                params.extend(book_ids)
-            try:
-                lexical = [r["chunk_id"] for r in self.repo.conn.execute(sql, params)]
-            except Exception:  # noqa: BLE001  FTS 语法错误时静默降级
-                lexical = []
+        lexical = self._lexical(match_expr, top_k, book_ids) if match_expr.strip() else []
 
         # 2) 向量路
         vector_hits: list[str] = []
@@ -65,6 +50,34 @@ class Searcher:
         except Exception:  # noqa: BLE001  无 key 或向量表缺失时词法兜底
             pass
 
+        return self._fuse(query, lexical, vector_hits, top_k)
+
+    def search_lexical(self, query: str, top_k: int = 20,
+                       book_ids: list[str] | None = None) -> dict:
+        """仅词法路（FTS5）检索，结构与 search 相同。embedding 不可用时的降级路径。"""
+        match_expr = query_to_match(query)
+        lexical = self._lexical(match_expr, top_k, book_ids) if match_expr.strip() else []
+        return self._fuse(query, lexical, [], top_k)
+
+    def _lexical(self, match_expr: str, top_k: int, book_ids: list[str] | None) -> list[str]:
+        sql = (
+            "SELECT c.rowid, c.chunk_id, c.book_id, c.section, c.content "
+            "FROM chunks_fts f JOIN chunks c ON c.rowid = f.rowid "
+            "WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?"
+        )
+        params: list = [match_expr, max(top_k * 3, 30)]
+        if book_ids:
+            ph = ",".join("?" for _ in book_ids)
+            sql += f" AND c.book_id IN ({ph})"
+            params.extend(book_ids)
+        try:
+            return [r["chunk_id"] for r in self.repo.conn.execute(sql, params)]
+        except Exception:  # noqa: BLE001  FTS 语法错误时静默降级
+            return []
+
+    def _fuse(self, query: str, lexical: list[str], vector_hits: list[str],
+              top_k: int) -> dict:
+        """RRF 融合 + 按书聚合（search / search_lexical 共用）。"""
         # 3) RRF 融合
         scores: dict[str, float] = {}
         for rank, cid in enumerate(lexical):

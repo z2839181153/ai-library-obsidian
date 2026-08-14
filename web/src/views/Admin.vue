@@ -87,7 +87,9 @@ function renderMdBold(text) {
 }
 function refHref(link) {
   const m = /bk_[a-z0-9]+/.exec(link || '')
-  return m ? `/book/${m[0]}` : '#'
+  // P4-3：阅览室高亮（hl= 搜索词）
+  const q = searchQ.value?.trim()
+  return m ? `/book/${m[0]}${q ? '?hl=' + encodeURIComponent(q) : ''}` : '#'
 }
 
 async function doSearch() {
@@ -190,7 +192,7 @@ const groupedConvs = computed(() => {
           <div v-if="searchResults.length" class="card mt8">
             <div v-for="b in searchResults" :key="b.book_id" class="row" style="padding:8px 0;border-bottom:1px solid var(--border)">
               <div class="grow">
-                <router-link :to="`/book/${b.book_id}`"><b>{{ b.title }}</b></router-link>
+                <router-link :to="`/book/${b.book_id}?hl=${encodeURIComponent(searchQ.value.trim())}`"><b>{{ b.title }}</b></router-link>
                 <div class="muted">{{ (b.snippet || '').slice(0, 140) }}</div>
                 <div class="muted" style="font-size:0.8em">命中 {{ (b.hit_chunks || []).length }} 段 · {{ b.score ? b.score.toFixed(3) : '' }}</div>
               </div>

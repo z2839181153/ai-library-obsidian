@@ -10,6 +10,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+*.log
+server_log.txt
+server_run*.log
 
 # 个人知识库内容（vault 只放模板/占位，不放真实笔记）
 vault/

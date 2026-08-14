@@ -55,6 +55,8 @@ export const api = {
   },
   book: (id) => request('GET', `/api/books/${id}`),
   bookContent: (id) => request('GET', `/api/books/${id}/content`),
+  bookRelated: (id, topN = 6) =>
+    request('GET', `/api/books/${id}/related?top_n=${topN}`, undefined, false, { timeout: 15000 }),
   classify: (id, force = false, opts = {}) => request('POST', `/api/books/${id}/classify`, { force }, false, opts),
   confirmShelve: (id, pos = {}) => request('POST', `/api/books/${id}/confirm`, pos),
   ask: (query, cvId = null, topK = 20, opts = {}) =>
