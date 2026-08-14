@@ -1,11 +1,12 @@
-"""SQLite schema：P0 核心表（设计文档 §5.3）。
+"""SQLite schema（设计文档 §5.3）。
 
-P0 实现：books / chunks / chunks_fts(FTS5) / index_state / embedding_cache
-楼层/房间/书架/技能/对话等表在对应阶段添加。
+- P0 实现：books / chunks / chunks_fts(FTS5) / index_state / embedding_cache
+- P1 实现：floors / rooms / shelves / catalog_cards / actions / conversations / messages
 """
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
 SCHEMA_SQL = """
@@ -65,13 +66,141 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
   model        TEXT,
   created_at   TEXT
 );
+
+-- ---------- P1：楼层/房间/书架（目录的 DB 镜像） ----------
+CREATE TABLE IF NOT EXISTS floors (
+  floor_id   TEXT PRIMARY KEY,        -- fl_*
+  name       TEXT NOT NULL,
+  code       TEXT,                    -- 1F
+  media_type TEXT,                    -- pdf/epub/web/chat/video/other
+  description TEXT,
+  ord        INTEGER DEFAULT 0,
+  custom     INTEGER DEFAULT 0,
+  created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS rooms (
+  room_id    TEXT PRIMARY KEY,        -- rm_*
+  floor_id   TEXT REFERENCES floors(floor_id),
+  name       TEXT NOT NULL,
+  description TEXT,
+  ord        INTEGER DEFAULT 0,
+  created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS shelves (
+  shelf_id   TEXT PRIMARY KEY,        -- sh_*
+  room_id    TEXT REFERENCES rooms(room_id),
+  name       TEXT NOT NULL,
+  description TEXT,
+  ord        INTEGER DEFAULT 0,
+  created_at TEXT
+);
+
+-- ---------- P1：图书卡片（LLM 生成，catalog/bk_*.md 的 DB 镜像） ----------
+CREATE TABLE IF NOT EXISTS catalog_cards (
+  book_id      TEXT PRIMARY KEY REFERENCES books(book_id),
+  summary      TEXT,                  -- 200 字摘要
+  chapters     TEXT,                  -- JSON [{title, summary, ref}]
+  concepts     TEXT,                  -- JSON [{term, definition, ref}]
+  distill_value INTEGER,              -- 0-100 蒸馏价值分
+  distill_reason TEXT,                -- 为什么值得/不值得蒸馏
+  category     TEXT,                  -- methodology|reference|narrative|data
+  tags         TEXT,                  -- JSON array
+  skills       TEXT,                  -- JSON [{skill_id, name, status}]（P2 用）
+  generated_at TEXT,
+  model        TEXT                   -- 生成用的模型
+);
+
+-- ---------- P1：操作账本（主人权利机制核心，可撤销） ----------
+CREATE TABLE IF NOT EXISTS actions (
+  act_id      TEXT PRIMARY KEY,       -- act_*
+  agent       TEXT,                   -- admin|purchaser|archivist|distiller|system|owner
+  action_type TEXT,                   -- classify|shelve|archive|delete|ingest|...
+  target_type TEXT,                   -- book/skill/conversation/...
+  target_id   TEXT,
+  params      TEXT,                   -- JSON（动作参数）
+  undo_params TEXT,                   -- JSON（撤销所需逆操作）
+  status      TEXT DEFAULT 'done',    -- doing|done|undone|failed
+  reason      TEXT,                   -- 动作理由（进日报）
+  created_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_actions_target ON actions(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status);
+
+-- ---------- P1：对话（建表，会话存储 P3 聊天实现） ----------
+CREATE TABLE IF NOT EXISTS conversations (
+  cv_id        TEXT PRIMARY KEY,
+  title        TEXT,
+  archived_book_id TEXT,              -- 归档为书后关联
+  created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS messages (
+  msg_id        TEXT PRIMARY KEY,
+  cv_id         TEXT REFERENCES conversations(cv_id),
+  role          TEXT,                 -- user|assistant|system
+  content       TEXT,
+  refs          TEXT,                 -- JSON [[wikilink]] 引用列表
+  private       INTEGER DEFAULT 0,
+  created_at    TEXT
+);
 """
+
+# 默认 4 个内置楼层（设计文档 §5.2；仅当 floors 表为空时种子插入）
+DEFAULT_FLOORS = [
+    {
+        "floor_id": "fl_1f_ebook", "name": "电子书", "code": "1F",
+        "media_type": "pdf", "description": "PDF/EPUB 电子书", "ord": 1, "custom": 0,
+    },
+    {
+        "floor_id": "fl_2f_web", "name": "网页公众号", "code": "2F",
+        "media_type": "web", "description": "网页/公众号文章", "ord": 2, "custom": 0,
+    },
+    {
+        "floor_id": "fl_3f_chat", "name": "聊天记录", "code": "3F",
+        "media_type": "chat", "description": "聊天记录（房间按人）", "ord": 3, "custom": 0,
+    },
+    {
+        "floor_id": "fl_4f_video", "name": "视频转写", "code": "4F",
+        "media_type": "video", "description": "视频转写/字幕", "ord": 4, "custom": 0,
+    },
+]
+
+# 来源媒介 → 默认楼层 code（设计文档 §6.2：楼层=来源媒介固定映射）
+MEDIA_TO_FLOOR = {
+    "pdf": "1F", "epub": "1F", "ebook": "1F", "markdown": "1F", "text": "1F",
+    "web": "2F", "html": "2F",
+    "chat": "3F",
+    "video": "4F", "srt": "4F", "vtt": "4F",
+}
+
+
+def floor_for_media_type(media_type: str) -> str | None:
+    """按来源媒介返回默认楼层 code；未知媒介返回 None（待定区）。"""
+    return MEDIA_TO_FLOOR.get((media_type or "").strip().lower())
+
+
+def seed_default_floors(conn: sqlite3.Connection) -> None:
+    """floors 表为空时插入默认 4 楼层。幂等。"""
+    count = conn.execute("SELECT COUNT(*) AS c FROM floors").fetchone()["c"]
+    if count:
+        return
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    for f in DEFAULT_FLOORS:
+        conn.execute(
+            "INSERT INTO floors (floor_id, name, code, media_type, description, ord, custom, created_at) "
+            "VALUES (:floor_id, :name, :code, :media_type, :description, :ord, :custom, :created_at)",
+            {**f, "created_at": now},
+        )
+    conn.commit()
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    """打开（必要时创建）数据库，启用 WAL 与 FTS5 触发器维护。"""
+    """打开（必要时创建）数据库，启用 WAL 与 FTS5 触发器维护。
+
+    check_same_thread=False：本地单进程服务，读写可能来自 FastAPI 线程池；
+    写入串行由 Repo._write_lock 保证（单写入者，设计文档 §6.9）。
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -81,6 +210,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
     cols = [r[1] for r in conn.execute("PRAGMA table_info(chunks)")]
     if "fts_content" not in cols:
         conn.execute("ALTER TABLE chunks ADD COLUMN fts_content TEXT")
+
+    # 默认楼层种子（幂等）
+    seed_default_floors(conn)
 
     # FTS5 同步触发器：chunks 增删改时同步 chunks_fts
     conn.executescript(
