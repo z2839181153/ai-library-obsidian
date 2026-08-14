@@ -197,6 +197,44 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
 .book-card:hover { box-shadow: 0 4px 14px rgba(60,50,30,0.14); transform: translateY(-1px); }
 .book-card .title { font-weight: 600; line-height: 1.35; }
 .book-card .meta { font-size: 0.85em; color: var(--ink-soft); }
+/* P5-4 阅览室入口：卡片"阅读"按钮（右下角，不干扰点击卡片打开） */
+.book-card .read-btn {
+  align-self: flex-end;
+  margin-top: auto;
+  font-size: 0.82em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft, rgba(61,90,69,0.12));
+  color: var(--accent, #3d5a45);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.book-card .read-btn:hover { background: var(--accent, #3d5a45); color: #fff; }
+/* P5-4 大厅"继续阅读"chip */
+.reading-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: box-shadow 0.15s, transform 0.1s;
+  max-width: 320px;
+}
+.reading-chip:hover { box-shadow: 0 3px 10px rgba(60,50,30,0.16); transform: translateY(-1px); }
+.reading-chip .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent, #3d5a45);
+  cursor: pointer;
+  font-size: 0.85em;
+  padding: 2px 6px;
+}
+.link-btn:hover { text-decoration: underline; }
 
 /* 楼层树 */
 .floor-list { display: flex; flex-direction: column; gap: 8px; }

@@ -212,7 +212,7 @@ async function classifyBook(book) {
           <div v-if="activeTag" class="mb8 muted">「{{ activeTag }}」共 {{ visibleTagBooks.length }} 本</div>
           <div v-if="activeTag && !visibleTagBooks.length" class="empty">该标签下暂无书</div>
           <div v-else-if="activeTag" class="grid grid-3">
-            <BookCard v-for="b in visibleTagBooks" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" />
+            <BookCard v-for="b in visibleTagBooks" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" @read="(x) => router.push(`/book/${x.book_id}`)" />
           </div>
         </template>
 
@@ -231,7 +231,7 @@ async function classifyBook(book) {
           <div v-else-if="error" class="empty">{{ error }}</div>
           <div v-else-if="!books.length" class="empty">该区域还没有书</div>
           <div v-else class="grid grid-3">
-            <BookCard v-for="b in books" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" />
+            <BookCard v-for="b in books" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" @read="(x) => router.push(`/book/${x.book_id}`)" />
           </div>
         </template>
       </div>

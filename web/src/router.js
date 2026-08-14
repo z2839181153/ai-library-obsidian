@@ -4,6 +4,7 @@ const routes = [
   { path: '/', name: 'hall', component: () => import('./views/Hall.vue'), meta: { title: '大厅' } },
   { path: '/floors', name: 'floors', component: () => import('./views/Floors.vue'), meta: { title: '楼层' } },
   { path: '/starmap', name: 'starmap', component: () => import('./views/StarMap.vue'), meta: { title: '占星室' } },
+  { path: '/reading', name: 'reading', component: () => import('./views/Reading.vue'), meta: { title: '阅览室' } },
   { path: '/book/:id', name: 'book', component: () => import('./views/BookDetail.vue'), meta: { title: '阅览室' } },
   { path: '/admin', name: 'admin', component: () => import('./views/Admin.vue'), meta: { title: '管理员' } },
   { path: '/purchaser', name: 'purchaser', component: () => import('./views/Purchaser.vue'), meta: { title: '采购员' } },

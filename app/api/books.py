@@ -23,10 +23,12 @@ class ConfirmRequest(BaseModel):
 @router.get("")
 def list_books(req: Request, status: str | None = None,
                floor: str | None = None, room: str | None = None,
-               q: str | None = None, tag: str | None = None) -> dict:
+               q: str | None = None, tag: str | None = None,
+               recent_read: bool = False, limit: int | None = None) -> dict:
     """列书。status=reviewing 即补书室（建议区=有分类建议，待定区=无）。
 
     tag=xxx：虚拟书架按标签过滤（匹配 catalog_cards.tags / books.tags JSON 元素）。
+    recent_read=true：按最近阅读时间倒序（阅览室"继续阅读"），不含删除书。
     """
     state = req.app.state.library
     sql = "SELECT * FROM books"
@@ -50,9 +52,16 @@ def list_books(req: Request, status: str | None = None,
             "OR tags LIKE ?)"
         )
         params.extend([f'%"{tag}"%', f'%"{tag}"%'])
-    if conds:
+    if recent_read:
+        conds.append("status != 'deleted' AND last_read_at IS NOT NULL")
         sql += " WHERE " + " AND ".join(conds)
-    sql += " ORDER BY updated_at DESC"
+        sql += " ORDER BY last_read_at DESC"
+    else:
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY updated_at DESC"
+    if limit and limit > 0:
+        sql += f" LIMIT {int(limit)}"
     rows = state.repo.conn.execute(sql, params).fetchall()
 
     books = []
@@ -86,6 +95,7 @@ def list_books(req: Request, status: str | None = None,
             "has_card": card is not None,
             "tags": tags,
             "updated_at": d.get("updated_at"),
+            "last_read_at": d.get("last_read_at"),
         })
     return {"books": books, "count": len(books)}
 
@@ -339,11 +349,20 @@ def related(req: Request, book_id: str, top_n: int = 6) -> dict:
 
 @router.get("/{book_id}/content")
 def book_content(req: Request, book_id: str) -> dict:
-    """原文阅读：按 chunk seq 分节返回（shelved 优先读 vault 文件）。"""
+    """原文阅读：按 chunk seq 分节返回（shelved 优先读 vault 文件）。
+
+    读取即记录 last_read_at（P5-4 阅览室"继续阅读"依据）。
+    """
     state = req.app.state.library
     book = state.repo.get_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="书不存在")
+
+    # 阅读标记：任何一次读取都更新最近阅读时间（soft 更新，不刷新 updated_at）
+    try:
+        state.repo.mark_book_read(book_id)
+    except Exception:  # noqa: BLE001 阅读标记失败不影响阅读
+        pass
 
     # shelved：读 vault 的 book.md；未上架：chunks 拼接
     text = None

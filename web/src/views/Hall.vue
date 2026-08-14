@@ -17,8 +17,17 @@ const quota = computed(() => health.value.quota || {})
 const weekChartEl = ref(null)
 let weekChart = null
 
+// P5-4 继续阅读（最近阅读书）
+const recentReads = ref([])
+async function loadRecentReads() {
+  try {
+    const r = await api.recentReads(5)
+    recentReads.value = (r.books || []).filter((x) => x.status !== 'deleted')
+  } catch { recentReads.value = [] }
+}
 onMounted(() => {
   store.refreshDashboard()
+  loadRecentReads()
   window.addEventListener('resize', resizeChart)
 })
 onUnmounted(() => {
@@ -163,6 +172,26 @@ async function upload(file) {
       </div>
       <div v-if="uploading" class="mt8">上传中…</div>
       <div v-if="uploadMsg" class="mt8" style="color:var(--accent)">{{ uploadMsg }}</div>
+    </div>
+
+    <!-- P5-4 继续阅读 -->
+    <div class="card mt16">
+      <div class="row" style="align-items:center">
+        <h3 style="margin:0 0 10px;flex:1">🕘 继续阅读</h3>
+        <button class="link-btn" @click="router.push('/reading')">全部 →</button>
+      </div>
+      <div v-if="!recentReads.length" class="empty">还没读过书——打开任意一本书后这里会出现</div>
+      <div v-else class="row wrap">
+        <div
+          v-for="b in recentReads"
+          :key="b.book_id"
+          class="reading-chip"
+          @click="router.push(`/book/${b.book_id}`)"
+        >
+          <span class="grow">{{ b.title }}</span>
+          <span class="badge" style="margin-left:8px">{{ b.media_type || '书' }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- 今日日报 -->

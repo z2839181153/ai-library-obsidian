@@ -29,5 +29,11 @@ const statusClass = computed(() => `status-${props.book.status}`)
       <span v-if="book.private" class="badge" style="margin-left:6px">🔒</span>
       <span v-if="book.distill_value !== undefined && book.distill_value !== null" style="margin-left:6px" :title="'蒸馏价值 ' + book.distill_value + ' / 100'">💎{{ book.distill_value }}</span>
     </div>
+    <button
+      v-if="book.status === 'shelved'"
+      class="read-btn"
+      title="打开阅览室"
+      @click.stop="$emit('read', book)"
+    >📖 阅读</button>
   </div>
 </template>

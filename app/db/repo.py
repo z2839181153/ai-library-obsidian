@@ -1,6 +1,7 @@
 """数据访问层：P0 books/chunks/index_state/embedding_cache + P1 floors/rooms/shelves/catalog_cards/actions。"""
 from __future__ import annotations
 
+import datetime
 import json
 import sqlite3
 import threading
@@ -84,6 +85,23 @@ class Repo:
     def delete_book(self, book_id: str) -> None:
         with self._write_lock:
             self.conn.execute("DELETE FROM books WHERE book_id=?", (book_id,))
+            self.conn.commit()
+
+    # ---------- P5: 最近阅读 ----------
+
+    def mark_book_read(self, book_id: str, when: str | None = None) -> None:
+        """记录阅读时间（阅览室打开原文时调用）。不影响 updated_at 排序。
+
+        毫秒精度：连续读两本书也能分出先后（recent_read 排序依据）。
+        """
+        if when is None:
+            now = datetime.datetime.now()
+            when = now.strftime("%Y-%m-%dT%H:%M:%S") + f".{now.microsecond // 1000:03d}"
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE books SET last_read_at=? WHERE book_id=?",
+                (when, book_id),
+            )
             self.conn.commit()
 
     # ---------- P4: 档案馆软删除（30 天可恢复） ----------

@@ -55,6 +55,7 @@ export const api = {
   },
   book: (id) => request('GET', `/api/books/${id}`),
   bookContent: (id) => request('GET', `/api/books/${id}/content`),
+  recentReads: (limit = 6) => request('GET', `/api/books?recent_read=true&limit=${limit}`),
   bookRelated: (id, topN = 6) =>
     request('GET', `/api/books/${id}/related?top_n=${topN}`, undefined, false, { timeout: 15000 }),
   classify: (id, force = false, opts = {}) => request('POST', `/api/books/${id}/classify`, { force }, false, opts),
