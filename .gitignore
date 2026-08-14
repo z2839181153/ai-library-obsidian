@@ -25,3 +25,4 @@ archive/
 secrets.json
 *.secret
 .env
+"server_log.txt"  
