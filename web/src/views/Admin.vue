@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { useLibraryStore } from '../stores/library'
@@ -15,7 +15,6 @@ const activeCv = ref(null)
 const messages = ref([])
 const input = ref('')
 const sending = ref(false)
-let askController = null
 
 const tab = ref('chat')        // chat | search | actions
 const searchQ = ref('')
@@ -25,9 +24,17 @@ const actions = ref([])
 
 const chatLog = ref(null)
 
+// P4-5 流式聊天：WS 消息处理
+let wsOff = null
+let streamMsgIndex = -1        // 当前流式 assistant 消息在 messages 中的下标
+
 onMounted(async () => {
   await loadConvs()
   await loadActions()
+  wsOff = store.onWSEvent(handleWSEvent)
+})
+onUnmounted(() => {
+  if (wsOff) wsOff()
 })
 
 async function loadConvs() {
@@ -41,38 +48,60 @@ async function openCv(cvId) {
   scrollBottom()
 }
 
+// ------- P4-5 流式聊天 -------
+function handleWSEvent(msg) {
+  if (msg.type === 'chat_start') {
+    messages.value.push({ role: 'assistant', content: '', refs: msg.refs || [], streaming: true })
+    streamMsgIndex = messages.value.length - 1
+    scrollBottom()
+  } else if (msg.type === 'chat_token') {
+    if (streamMsgIndex >= 0) {
+      messages.value[streamMsgIndex].content += msg.delta || ''
+      scrollBottom()
+    }
+  } else if (msg.type === 'chat_done') {
+    if (streamMsgIndex >= 0) {
+      const m = messages.value[streamMsgIndex]
+      m.streaming = false
+      if (msg.cancelled) {
+        m.content = m.content || '（已取消）'
+      } else if (!m.content && msg.answer) {
+        m.content = msg.answer
+      }
+      if (!(m.refs || []).length) m.refs = msg.refs || []
+      if (msg.cv_id) activeCv.value = msg.cv_id
+      streamMsgIndex = -1
+    }
+    sending.value = false
+    loadConvs()
+    scrollBottom()
+  }
+}
+
 async function send() {
   const q = input.value.trim()
   if (!q || sending.value) return
   sending.value = true
-  askController = new AbortController()
+  streamMsgIndex = -1
   messages.value.push({ role: 'user', content: q, refs: [] })
   input.value = ''
   scrollBottom()
-  try {
-    // 180s 超时 + 用户可取消（429 等 LLM 挂起场景可及时脱身）
-    const r = await api.ask(q, activeCv.value, 20, { signal: askController.signal, timeout: 180000 })
-    activeCv.value = r.cv_id
-    messages.value.push({ role: 'assistant', content: r.answer || '（空回答）', refs: r.refs || [] })
-    await loadConvs()
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      messages.value.push({ role: 'assistant', content: '（已取消/超时，未获得回答）', refs: [] })
-    } else {
-      messages.value.push({ role: 'assistant', content: `❌ ${e.message}`, refs: [] })
-    }
-  } finally {
-    askController = null
+  const sent = store.sendWS({
+    type: 'ask_stream',
+    content: q,
+    top_k: 20,
+    cv_id: activeCv.value || null,
+  })
+  if (!sent) {
     sending.value = false
+    messages.value.push({ role: 'assistant', content: '（WS 未连接，无法发送；请稍候重试）', refs: [] })
     scrollBottom()
   }
 }
 
 function cancelAsk() {
-  if (askController) {
-    askController.abort()
-    askController = null
-  }
+  // 取消流式：后端回 chat_done(cancelled=true)
+  store.sendWS({ type: 'cancel' })
 }
 
 function scrollBottom() {
@@ -160,14 +189,14 @@ const groupedConvs = computed(() => {
           <div class="chat-log" ref="chatLog">
             <div v-if="!messages.length" class="empty">问点什么吧，比如「检索增强是什么？」</div>
             <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-              <span v-html="renderMdBold(m.content)"></span>
+              <span v-html="renderMdBold(m.content)"></span><span v-if="m.streaming" class="cursor">▍</span>
               <div v-if="(m.refs || []).length" class="refs">
                 <router-link v-for="(r, j) in m.refs" :key="j" :to="refHref(r.link || '')" style="margin-right:8px">
                   📄 {{ r.title }}
                 </router-link>
               </div>
             </div>
-            <div v-if="sending" class="msg assistant">思考中…</div>
+            <div v-if="sending && streamMsgIndex < 0" class="msg assistant">思考中…</div>
           </div>
           <div class="row mt8">
             <input type="text" v-model="input" placeholder="提问（Enter 发送）"
@@ -224,3 +253,16 @@ const groupedConvs = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* P4-5 流式光标：逐字输出时在末尾闪烁 */
+.cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--accent);
+  animation: cursor-blink 1s step-start infinite;
+}
+@keyframes cursor-blink {
+  50% { opacity: 0; }
+}
+</style>

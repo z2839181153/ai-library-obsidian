@@ -7,6 +7,7 @@ export const useLibraryStore = defineStore('library', {
     dashboard: null,
     wsConnected: false,
     ws: null,
+    wsListeners: [],
     toasts: [],
     toastSeq: 0,
     pendingClassify: 0,
@@ -41,6 +42,10 @@ export const useLibraryStore = defineStore('library', {
       ws.onmessage = (ev) => {
         let msg
         try { msg = JSON.parse(ev.data) } catch { return }
+        // 事件订阅者（P4-5：Admin.vue 流式聊天等）
+        this.wsListeners.forEach((cb) => {
+          try { cb(msg) } catch (e) { console.warn('WS listener error', e) }
+        })
         if (msg.type === 'notice') {
           const text = this._noticeText(msg)
           if (text) this.toast(text, 'info')
@@ -49,6 +54,14 @@ export const useLibraryStore = defineStore('library', {
       }
       this.ws = ws
       return ws
+    },
+    // 订阅 WS 消息（返回退订函数）
+    onWSEvent(cb) {
+      this.wsListeners.push(cb)
+      return () => {
+        const i = this.wsListeners.indexOf(cb)
+        if (i >= 0) this.wsListeners.splice(i, 1)
+      }
     },
     sendWS(obj) {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {

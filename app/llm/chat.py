@@ -114,6 +114,48 @@ class ChatClient:
             raise LLMOutputError(f"模型输出无法解析为 JSON: {raw[:300]}")
         return data
 
+    def chat_stream(self, messages: list[dict], temperature: float = 0.3,
+                    max_tokens: int = 1024):
+        """流式对话补全：逐段 yield assistant 文本（P4-5）。
+
+        - 首次 create 失败或整段流为空 → 按 chat() 相同重试策略
+        - 401/403/404/429 → 立即抛 LLMUnavailable（429 默认不重试，见 _is_fatal）
+        - 流中途断掉（网络抖动）：整个流重试（已 yield 的文本会重复，可接受）
+        """
+        last_err: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            collected: list[str] = []
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=True,
+                )
+                for chunk in resp:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    piece = (delta.content or "") if delta else ""
+                    if piece:
+                        collected.append(piece)
+                        yield piece
+                if not collected:
+                    raise ValueError("模型流式返回空响应（choices 为空）")
+                return
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if self._is_fatal(e) and not self.retry_on_429:
+                    code = getattr(e, "status_code", None)
+                    raise LLMUnavailable(
+                        f"LLM 调用失败（HTTP {code}，不可重试，已降级）: {e}"
+                    ) from e
+                if attempt >= self.max_retries:
+                    break
+                time.sleep(min(self.retry_base * (attempt + 1), self.retry_max))
+        raise LLMUnavailable(f"chat_stream API 调用失败: {last_err}")
+
 
 def parse_json_loose(text: str) -> dict | None:
     """宽松解析模型 JSON 输出：去围栏、找首尾花括号、失败返回 None。"""

@@ -92,6 +92,15 @@ class FakeLLM:
         self.calls.append(messages[-1]["content"])
         return "（AI图书馆测试回答）参考 [[catalog/bk_test]]。"
 
+    def chat_stream(self, messages: list[dict], temperature: float = 0.3,
+                    max_tokens: int = 1024):
+        """流式：逐段 yield（P4-5 测试用），整段内容与 chat() 一致。"""
+        self.calls.append(messages[-1]["content"])
+        text = "（AI图书馆测试回答）参考 [[catalog/bk_test]]。"
+        # 按 4 字一段切分，模拟 token 流
+        for i in range(0, len(text), 4):
+            yield text[i : i + 4]
+
     def chat_json(self, prompt: str, system: str | None = None) -> dict:
         self.calls.append(prompt)
         if self.responder is not None:

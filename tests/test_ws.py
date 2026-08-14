@@ -22,10 +22,12 @@ def test_ws_chat(client):
 
 
 def test_ws_ask_stream_alias(client):
+    # P4-5 起 ask_stream 是流式；空库无命中 → 无 chat_start，直接 chat_done
     with client.websocket_connect("/ws/chat") as ws:
         ws.send_json({"type": "ask_stream", "content": "你好"})
-        assert ws.receive_json()["type"] == "chat_start"
-        assert ws.receive_json()["type"] == "chat_done"
+        done = ws.receive_json()
+        assert done["type"] == "chat_done"
+        assert done["answer"]  # 馆内暂无相关内容 / 回答
 
 
 def test_ws_empty_query(client):

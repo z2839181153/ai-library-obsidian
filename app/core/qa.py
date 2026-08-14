@@ -104,6 +104,87 @@ class QAService:
 
     # ---------- 内部 ----------
 
+    def ask_stream(self, query: str, top_k: int = 20):
+        """流式问答（P4-5）：定位+路由同 ask()，LLM 回答逐段 yield。
+
+        yield 事件 dict（供 /ws/chat 转发）：
+          {"type": "chat_start", "query", "refs", "books", "used_skills"}
+          {"type": "chat_token", "delta": "..."}      # 零到多次
+          {"type": "chat_done", "query", "answer", "refs", "books",
+           "used_skills", "model_unavailable"}
+        """
+        result = self.searcher.search(query, top_k=top_k)
+        books = result.get("books", [])[:_MAX_BOOKS]
+        refs = []
+        for b in books:
+            book = self.repo.get_book(b["book_id"]) or {}
+            card = self.repo.get_card(b["book_id"])
+            snippet = ""
+            if b.get("hit_chunks"):
+                snippet = b["hit_chunks"][0]["content"][:120]
+            elif card and card.get("summary"):
+                snippet = card["summary"][:120]
+            refs.append({
+                "book_id": b["book_id"],
+                "title": book.get("title", b["book_id"]),
+                "link": f"[[catalog/{b['book_id']}]]",
+                "snippet": snippet,
+                "status": book.get("status", ""),
+            })
+
+        if not books:
+            yield {
+                "type": "chat_done", "query": query,
+                "answer": "馆内暂无相关内容。",
+                "refs": [], "books": [], "used_skills": [],
+                "model_unavailable": False,
+            }
+            return
+
+        # ③ 技能路由（同 ask）
+        used_skills = []
+        system = _QA_SYSTEM
+        if self.router is not None:
+            routed = self.router.retrieve(query)
+            hint = self.router.build_system_hint(routed)
+            if hint:
+                system = _QA_SYSTEM + "\n\n" + hint
+                used_skills = [
+                    {"skill_id": s["skill_id"], "name": s["name"]}
+                    for s in routed.get("skills", [])
+                ]
+
+        context = self._build_context(books)
+        book_list = [{"book_id": r["book_id"], "title": r["title"], "status": r["status"]} for r in refs]
+
+        yield {
+            "type": "chat_start", "query": query,
+            "refs": refs, "books": book_list, "used_skills": used_skills,
+        }
+
+        answer_parts: list[str] = []
+        model_unavailable = False
+        try:
+            for piece in self.llm.chat_stream([
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"问题：{query}\n\n馆藏资料：\n{context}"},
+            ]):
+                answer_parts.append(piece)
+                yield {"type": "chat_token", "delta": piece}
+        except LLMUnavailable:
+            model_unavailable = True
+            fallback = "（模型不可用：未配置 API key）以下是检索到的原文片段：\n\n" + self._snippet_only(books)
+            answer_parts.append(fallback)
+            yield {"type": "chat_token", "delta": fallback}
+
+        yield {
+            "type": "chat_done", "query": query,
+            "answer": "".join(answer_parts),
+            "refs": refs, "books": book_list,
+            "used_skills": used_skills,
+            "model_unavailable": model_unavailable,
+        }
+
     def _build_context(self, books: list[dict]) -> str:
         parts: list[str] = []
         for b in books:
