@@ -445,3 +445,169 @@ class Repo:
                 (json.dumps(skills, ensure_ascii=False), book_id),
             )
             self.conn.commit()
+
+    # ---------- P3: recommendations（采购推荐） ----------
+
+    def insert_recommendation(self, rec: dict) -> str:
+        """写入推荐；rec_id 缺省生成 rec_*。返回 rec_id。"""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        rec = dict(rec)
+        rec_id = rec.get("rec_id") or new_id("rec")
+        rec["rec_id"] = rec_id
+        rec.setdefault("status", "pending")
+        rec.setdefault("created_at", now)
+        cols = ", ".join(rec.keys())
+        marks = ", ".join("?" for _ in rec)
+        with self._write_lock:
+            self.conn.execute(
+                f"INSERT OR REPLACE INTO recommendations ({cols}) VALUES ({marks})",
+                list(rec.values()),
+            )
+            self.conn.commit()
+        return rec_id
+
+    def list_recommendations(self, date: str | None = None,
+                             status: str | None = None,
+                             limit: int = 100) -> list[dict]:
+        sql = "SELECT * FROM recommendations"
+        conds, params = [], []
+        if date:
+            conds.append("date=?")
+            params.append(date)
+        if status:
+            conds.append("status=?")
+            params.append(status)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY score DESC, created_at DESC LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in self.conn.execute(sql, params)]
+
+    def get_recommendation(self, rec_id: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM recommendations WHERE rec_id=?", (rec_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_recommendation(self, rec_id: str, fields: dict) -> None:
+        """部分更新推荐行。"""
+        fields = dict(fields)
+        fields.pop("rec_id", None)
+        if not fields:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE recommendations SET {sets} WHERE rec_id=?",
+                list(fields.values()) + [rec_id],
+            )
+            self.conn.commit()
+
+    def recommendation_stats(self, date: str) -> dict:
+        """某日推荐状态统计（配额执行率用）。"""
+        rows = self.conn.execute(
+            "SELECT status, COUNT(*) AS c FROM recommendations WHERE date=? GROUP BY status",
+            (date,),
+        ).fetchall()
+        stats = {"total": 0, "pending": 0, "collected": 0,
+                 "ignored": 0, "not_interested": 0}
+        for r in rows:
+            stats[r["status"]] = int(r["c"])
+            stats["total"] += int(r["c"])
+        return stats
+
+    # ---------- P3: daily_reports（日报） ----------
+
+    def insert_report(self, report: dict) -> str:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        report = dict(report)
+        report_id = report.get("report_id") or new_id("rep")
+        report["report_id"] = report_id
+        report.setdefault("created_at", now)
+        if isinstance(report.get("content"), (dict, list)):
+            report["content"] = json.dumps(report["content"], ensure_ascii=False)
+        cols = ", ".join(report.keys())
+        marks = ", ".join("?" for _ in report)
+        with self._write_lock:
+            self.conn.execute(
+                f"INSERT OR REPLACE INTO daily_reports ({cols}) VALUES ({marks})",
+                list(report.values()),
+            )
+            self.conn.commit()
+        return report_id
+
+    def list_reports(self, date: str | None = None,
+                     rtype: str | None = None,
+                     limit: int = 50) -> list[dict]:
+        sql = "SELECT * FROM daily_reports"
+        conds, params = [], []
+        if date:
+            conds.append("date=?")
+            params.append(date)
+        if rtype:
+            conds.append("rtype=?")
+            params.append(rtype)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        out = []
+        for r in self.conn.execute(sql, params):
+            d = dict(r)
+            try:
+                d["content"] = json.loads(d.get("content") or "{}")
+            except json.JSONDecodeError:
+                d["content"] = {}
+            out.append(d)
+        return out
+
+    def latest_report(self, rtype: str | None = None) -> Optional[dict]:
+        sql = "SELECT * FROM daily_reports"
+        params: list = []
+        if rtype:
+            sql += " WHERE rtype=?"
+            params.append(rtype)
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        row = self.conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["content"] = json.loads(d.get("content") or "{}")
+        except json.JSONDecodeError:
+            d["content"] = {}
+        return d
+
+    # ---------- P3: profile（画像，单行） ----------
+
+    def get_profile(self) -> dict:
+        row = self.conn.execute("SELECT * FROM profile WHERE id=1").fetchone()
+        if not row:
+            return {"themes": {}, "direction_pool": [], "prefs": {}}
+        d = dict(row)
+        for k in ("themes", "direction_pool", "prefs"):
+            try:
+                d[k] = json.loads(d.get(k) or ("{}" if k != "direction_pool" else "[]"))
+            except json.JSONDecodeError:
+                d[k] = {} if k != "direction_pool" else []
+        return d
+
+    def save_profile(self, themes: dict | None = None,
+                     direction_pool: list | None = None,
+                     prefs: dict | None = None) -> None:
+        """合并更新单行画像。"""
+        cur = self.get_profile()
+        new_themes = themes if themes is not None else cur.get("themes", {})
+        new_pool = direction_pool if direction_pool is not None else cur.get("direction_pool", [])
+        new_prefs = prefs if prefs is not None else cur.get("prefs", {})
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        with self._write_lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO profile (id, themes, direction_pool, prefs, updated) "
+                "VALUES (1, ?, ?, ?, ?)",
+                (json.dumps(new_themes, ensure_ascii=False),
+                 json.dumps(new_pool, ensure_ascii=False),
+                 json.dumps(new_prefs, ensure_ascii=False),
+                 now),
+            )
+            self.conn.commit()

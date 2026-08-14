@@ -146,6 +146,39 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at    TEXT
 );
 
+-- ---------- P3：采购/日报/画像（设计文档 §5.3 purchase/reports/profile） ----------
+CREATE TABLE IF NOT EXISTS recommendations (
+  rec_id        TEXT PRIMARY KEY,     -- rec_*
+  date          TEXT,                 -- 2026-08-14
+  title         TEXT NOT NULL,
+  url           TEXT,
+  source        TEXT,                 -- arxiv|hn|zhihu|rss|manual|...
+  score         REAL,
+  reason        TEXT,                 -- 荐书理由（进日报，AI 可解释）
+  status        TEXT DEFAULT 'pending', -- pending|collected|ignored|not_interested
+  feedback_note TEXT,
+  created_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rec_date ON recommendations(date);
+CREATE INDEX IF NOT EXISTS idx_rec_status ON recommendations(status);
+
+CREATE TABLE IF NOT EXISTS daily_reports (
+  report_id TEXT PRIMARY KEY,         -- rep_*
+  date      TEXT,
+  rtype     TEXT,                     -- purchase|ingest|distill|system
+  content   TEXT,                     -- JSON（卡片渲染数据）
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_report_date ON daily_reports(date, rtype);
+
+CREATE TABLE IF NOT EXISTS profile (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),  -- 单行
+  themes    TEXT,                     -- JSON {主题: 数量}
+  direction_pool TEXT,                -- JSON [{topic, weight, source, first_seen}]
+  prefs     TEXT,                     -- JSON {default_mode, max_daily_purchase, no_video_unless_hot, auto_score_threshold}
+  updated   TEXT
+);
+
 -- ---------- P2：蒸馏产物注册表（设计文档 §5.3 skills 表） ----------
 CREATE TABLE IF NOT EXISTS skills (
   skill_id     TEXT PRIMARY KEY,      -- sk_*

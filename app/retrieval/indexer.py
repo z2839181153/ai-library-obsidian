@@ -161,6 +161,30 @@ class Indexer:
         ).fetchone()
         return bool(row["c"])
 
+    def index_book(self, book_id: str, ingested) -> dict:
+        """对单本书执行 chunk + embedding + 写入（P3 入馆用，不依赖目录扫描）。
+
+        区别于 run()：书已登记在 books 表（status=incoming），这里只补 chunks
+        与向量，不碰 books 行、不触发"文件消失删除"逻辑。
+        """
+        t0 = time.time()
+        self.repo.delete_chunks_by_book(book_id)
+        self.vec.delete_by_book(book_id)
+        chunks = chunk_text(ingested.clean_text, book_id)
+        if not chunks:
+            return {"chunks": 0, "elapsed_sec": round(time.time() - t0, 2)}
+        vecs = self.embed.embed_many([c["content"] for c in chunks])
+        rows: list[dict] = []
+        for chunk, vec in zip(chunks, vecs):
+            chunk["token_cnt"] = len(chunk["content"])
+            chunk["fts_content"] = tokenize(chunk["content"])
+            chunk["vector_id"] = chunk["chunk_id"]
+            self.repo.insert_chunk(chunk)
+            rows.append({"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vec})
+        self.repo.commit()
+        self.vec.upsert(rows)
+        return {"chunks": len(rows), "elapsed_sec": round(time.time() - t0, 2)}
+
     def _index_book(self, book_id: str, ingested) -> None:
         """对一本书执行 chunk + embedding + 写入（先清旧）。"""
         chunks = chunk_text(ingested.clean_text, book_id)

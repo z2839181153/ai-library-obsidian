@@ -1,0 +1,3 @@
+# 前端依赖与构建缓存（dist 提交，FastAPI 直接托管开箱即用）
+node_modules/
+*.log

@@ -34,9 +34,13 @@ class LibraryState:
     skill_index: SkillIndex = field(init=False)
     router: SkillRouter = field(init=False)
     distill_executor: object = None     # 测试注入 FakeDistiller；None=运行时创建 LLMDistiller
+    ws: object = None                   # P3: ConnectionManager（见 app/ws/manager.py）
 
     def __post_init__(self) -> None:
+        from app.ws.manager import ConnectionManager
+
         self.cfg.ensure_dirs()
+        self.ws = ConnectionManager()
         self.repo = Repo(self.cfg.paths.data_dir / "library.db")
         self.vec = VectorStore(self.cfg.paths.data_dir / "lancedb")
         self.embed = EmbeddingClient(self.cfg, self.repo)
