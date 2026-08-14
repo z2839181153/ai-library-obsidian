@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import (actions, ask, books, conversations, dashboard, distill,
-                     floors, health, index, ingest, purchase, settings, skills, ws)
+                     floors, health, index, ingest, purchase, settings, skills, starmap, ws)
 from app.config import AppConfig
 from app.state import build_state
 
@@ -63,6 +63,7 @@ app.include_router(settings.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(purchase.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
+app.include_router(starmap.router, prefix="/api")
 app.include_router(ws.router)
 
 
