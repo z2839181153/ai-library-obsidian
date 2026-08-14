@@ -45,6 +45,8 @@ class CardGenerator:
         self.repo = repo
         self.llm = llm
         self.cfg = cfg
+        self._last_llm_error: str | None = None
+        self.last_prompt: str | None = None
 
     # ---------- 主入口 ----------
 
@@ -73,7 +75,8 @@ class CardGenerator:
 
         data = self._call_llm(book, chunks)
         if data is None:
-            return CardResult(book_id=book_id, error="LLM 不可用（未配置 API key）")
+            return CardResult(book_id=book_id,
+                              error=self._last_llm_error or "LLM 不可用（未配置 API key）")
 
         # 楼层固定映射 + 房间/书架建议
         suggest_floor = self._assign_floor(book.get("media_type", ""))
@@ -127,11 +130,14 @@ class CardGenerator:
 
     def _call_llm(self, book: dict, chunks: list[dict]) -> dict | None:
         prompt = self._build_prompt(book, chunks)
+        self.last_prompt = prompt
         try:
             return self.llm.chat_json(prompt, system=_CARD_SYSTEM)
-        except LLMUnavailable:
+        except LLMUnavailable as e:
+            self._last_llm_error = f"LLM 不可用: {e} | prompt_len={len(prompt)} | head={prompt[:120]!r}"
             return None
-        except Exception:  # noqa: BLE001  输出解析失败等：记录后按不可用处理
+        except Exception as e:  # noqa: BLE001  输出解析失败等
+            self._last_llm_error = f"LLM 输出解析失败: {e} | prompt_len={len(prompt)}"
             return None
 
     def _build_prompt(self, book: dict, chunks: list[dict]) -> str:

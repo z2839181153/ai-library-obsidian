@@ -45,18 +45,25 @@ class ChatClient:
             )
         return self._client
 
-    def chat(self, messages: list[dict], temperature: float = 0.3) -> str:
-        """普通对话补全，返回 assistant 文本。失败重试 2 次。"""
+    def chat(self, messages: list[dict], temperature: float = 0.3,
+             max_tokens: int = 1024) -> str:
+        """普通对话补全，返回 assistant 文本。失败/空响应重试 4 次。
+
+        ModelScope 免费 API 偶发空响应（choices=None，不抛异常）或限流——
+        显式检测并当作失败重试（间隔递增 1.5s→12s）；max_tokens 显式给出。
+        """
         last_err: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                 )
-                content = resp.choices[0].message.content or ""
-                return content.strip()
+                if not resp.choices or not resp.choices[0].message.content:
+                    raise ValueError("模型返回空响应（choices 为空）")
+                return resp.choices[0].message.content.strip()
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 time.sleep(1.5 * (attempt + 1))

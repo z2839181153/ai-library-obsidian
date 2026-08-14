@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -20,9 +21,12 @@ def main() -> int:
     use_real = "--real" in sys.argv
     td = tempfile.TemporaryDirectory()
     state = None
+    t_start = time.time()
     try:
         root = Path(td.name)
-        cfg = AppConfig()
+        # 先按真实路径 load（读取 settings.json 与 data/secrets.json 的 API key），
+        # 再把数据/库目录指向临时目录，避免污染真实库
+        cfg = AppConfig.load()
         cfg.paths.data_dir = root / "data"
         cfg.paths.vault_dir = root / "vault"
 
@@ -89,6 +93,7 @@ def main() -> int:
         print(f"[7] 撤销 OK  status={undo['status']} 动作已回滚")
 
         print("\n[PASS] P1 验收通过（全部 7 步）")
+        print(f"      总耗时 {time.time() - t_start:.1f}s（真实 API 模式主要耗时在 LLM/embedding 调用）")
         return 0
     finally:
         if state is not None:
