@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import * as echarts from 'echarts'
+import echarts from '../echarts'
 import { api } from '../api'
 
 const router = useRouter()
@@ -162,7 +162,8 @@ onMounted(async () => {
     error.value = e.message || '加载失败'
   } finally {
     loading.value = false
-    render()
+    // chartEl 在 v-else 分支里，loading 置 false 后 DOM 未同步挂载，需 nextTick 再 init
+    nextTick(render)
   }
 })
 

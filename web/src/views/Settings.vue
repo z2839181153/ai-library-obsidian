@@ -1,6 +1,6 @@
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import echarts from '../echarts'
 import { api } from '../api'
 import { useLibraryStore } from '../stores/library'
 import ModalDialog from '../components/ModalDialog.vue'
@@ -209,6 +209,8 @@ async function loadProfile(force = false) {
   try {
     profileStats.value = await api.get('/api/profile/stats')
     poolEdit.value = (profileStats.value.direction_pool || []).map((x) => ({ ...x }))
+    // 图表容器在 v-else-if="profileStats" 分支里，需等 DOM 挂载后再渲染
+    await nextTick()
     renderProfileChart()
     renderRecChart()
   } catch (e) { store.toast(`❌ ${e.message}`, 'error') }

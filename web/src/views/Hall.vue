@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLibraryStore } from '../stores/library'
 import { api } from '../api'
-import * as echarts from 'echarts'
+import echarts from '../echarts'
 
 const store = useLibraryStore()
 const router = useRouter()
