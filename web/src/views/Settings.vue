@@ -1,5 +1,6 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import * as echarts from 'echarts'
 import { api } from '../api'
 import { useLibraryStore } from '../stores/library'
 import ModalDialog from '../components/ModalDialog.vue'
@@ -189,6 +190,111 @@ async function distillDecision(book, decision) {
     await loadDistillQueue()
   } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
 }
+
+// ------- 借书证画像（P4-4） -------
+const profileStats = ref(null)
+const profileLoading = ref(false)
+const profileChartEl = ref(null)
+const recChartEl = ref(null)
+const profileDim = ref('floors')     // floors | tags | themes
+let profileChart = null
+let recChart = null
+
+const poolEdit = ref([])             // 方向池编辑副本
+const poolSaving = ref(false)
+
+async function loadProfile(force = false) {
+  if (!force && profileStats.value) { renderProfileChart(); renderRecChart(); return }
+  profileLoading.value = true
+  try {
+    profileStats.value = await api.get('/api/profile/stats')
+    poolEdit.value = (profileStats.value.direction_pool || []).map((x) => ({ ...x }))
+    renderProfileChart()
+    renderRecChart()
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { profileLoading.value = false }
+}
+
+function profileDistData() {
+  const st = profileStats.value || {}
+  if (profileDim.value === 'floors') {
+    return (st.floors_dist || []).filter((x) => x.count > 0)
+      .map((x) => ({ name: `${x.code} ${x.name}`, value: x.count }))
+  }
+  if (profileDim.value === 'tags') {
+    return (st.tags_dist || []).filter((x) => x.count > 0)
+      .map((x) => ({ name: x.tag, value: x.count }))
+  }
+  return (st.themes_dist || []).filter((x) => x.count > 0)
+    .map((x) => ({ name: x.topic, value: x.count }))
+}
+
+function renderProfileChart() {
+  if (!profileChartEl.value) return
+  if (!profileChart) profileChart = echarts.init(profileChartEl.value)
+  const data = profileDistData()
+  profileChart.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} 本 ({d}%)' },
+    legend: { bottom: 0, type: 'scroll' },
+    series: [{
+      type: 'pie',
+      radius: ['38%', '68%'],
+      center: ['50%', '44%'],
+      itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+      label: { formatter: '{b}\n{c} 本', fontSize: 11 },
+      data,
+    }],
+  }, true)
+}
+
+function renderRecChart() {
+  if (!recChartEl.value) return
+  if (!recChart) recChart = echarts.init(recChartEl.value)
+  const hist = (profileStats.value || {}).rec_history || []
+  const dates = hist.map((h) => h.date)
+  const series = (key, name, color) => ({
+    name, type: 'bar', stack: 'rec', data: hist.map((h) => h[key] || 0),
+    itemStyle: { color },
+  })
+  recChart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { bottom: 0 },
+    grid: { left: 36, right: 16, top: 24, bottom: 44 },
+    xAxis: { type: 'category', data: dates },
+    yAxis: { type: 'value', minInterval: 1 },
+    series: [
+      series('collected', '收藏', '#3d5a45'),
+      series('ignored', '忽略', '#8a8a8a'),
+      series('not_interested', '不感兴趣', '#c35f4a'),
+      series('pending', '待处理', '#c9bfa8'),
+    ],
+  }, true)
+}
+
+function switchProfileDim(dim) {
+  profileDim.value = dim
+  renderProfileChart()
+}
+
+function poolAdd() {
+  const today = new Date().toISOString().slice(0, 10)
+  poolEdit.value.push({ topic: '', weight: 1, source: 'manual', first_seen: today })
+}
+function poolRemove(i) { poolEdit.value.splice(i, 1) }
+async function poolSave() {
+  poolSaving.value = true
+  try {
+    await api.put('/api/profile/direction-pool', { direction_pool: poolEdit.value })
+    store.toast('✅ 方向池已保存', 'info')
+    await loadProfile(true)
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { poolSaving.value = false }
+}
+
+onUnmounted(() => {
+  if (profileChart) { profileChart.dispose(); profileChart = null }
+  if (recChart) { recChart.dispose(); recChart = null }
+})
 </script>
 
 <template>
@@ -207,6 +313,7 @@ async function distillDecision(book, decision) {
         蒸馏确认
         <span v-if="distillQueue.length" class="pending-badge">{{ distillQueue.length }}</span>
       </button>
+      <button class="small" :class="{ primary: tab === 'profile' }" @click="tab = 'profile'; loadProfile()">🪪 借书证</button>
     </div>
 
     <!-- 基础设置 -->
@@ -368,6 +475,105 @@ async function distillDecision(book, decision) {
           <button class="small danger" @click="distillDecision(b, 'cancel')">✖ 取消</button>
         </div>
       </div>
+    </template>
+
+    <!-- 借书证画像（P4-4） -->
+    <template v-else-if="tab === 'profile'">
+      <div v-if="profileLoading && !profileStats" class="loading">加载画像…</div>
+      <template v-else-if="profileStats">
+        <!-- 头部统计 -->
+        <div class="grid grid-4 mb16">
+          <div class="card">
+            <div class="muted">已上架藏书</div>
+            <div style="font-size:2em;font-weight:700">
+              {{ (profileStats.floors_dist || []).reduce((s, x) => s + x.count, 0) }}
+            </div>
+          </div>
+          <div class="card">
+            <div class="muted">收藏（采购入馆）</div>
+            <div style="font-size:2em;font-weight:700">{{ profileStats.rec_totals?.collected ?? 0 }}</div>
+          </div>
+          <div class="card">
+            <div class="muted">不感兴趣</div>
+            <div style="font-size:2em;font-weight:700">{{ profileStats.rec_totals?.not_interested ?? 0 }}</div>
+          </div>
+          <div class="card">
+            <div class="muted">方向池条目</div>
+            <div style="font-size:2em;font-weight:700">{{ profileStats.direction_pool?.length ?? 0 }}</div>
+          </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns: 1fr 1fr; align-items:start">
+          <!-- 藏书分布饼图 -->
+          <div class="card">
+            <div class="row mb8">
+              <h3 style="margin:0">📊 藏书分布</h3>
+              <span class="spacer"></span>
+              <button class="small" :class="{ primary: profileDim === 'floors' }" @click="switchProfileDim('floors')">楼层</button>
+              <button class="small" :class="{ primary: profileDim === 'tags' }" @click="switchProfileDim('tags')">标签</button>
+              <button class="small" :class="{ primary: profileDim === 'themes' }" @click="switchProfileDim('themes')">主题</button>
+            </div>
+            <div v-if="!profileDistData().length" class="empty">暂无藏书（书确认上架后展示分布）</div>
+            <div ref="profileChartEl" style="width:100%;height:300px"></div>
+          </div>
+
+          <!-- 收藏/拒绝历史 -->
+          <div class="card">
+            <h3 style="margin:0 0 8px">🛒 采购收藏 / 拒绝历史</h3>
+            <div v-if="!(profileStats.rec_history || []).length" class="empty">还没有采购推荐记录</div>
+            <div ref="recChartEl" style="width:100%;height:300px"></div>
+            <div class="muted mt8" style="font-size:0.85em">
+              累计：{{ profileStats.rec_totals?.collected ?? 0 }} 收藏 ·
+              {{ profileStats.rec_totals?.ignored ?? 0 }} 忽略 ·
+              {{ profileStats.rec_totals?.not_interested ?? 0 }} 不感兴趣
+            </div>
+          </div>
+        </div>
+
+        <!-- 最近推荐明细 -->
+        <div class="card mt16">
+          <h3 style="margin:0 0 8px">📋 最近推荐明细</h3>
+          <div v-if="!(profileStats.recent_recs || []).length" class="empty">暂无推荐记录</div>
+          <table v-else class="tbl">
+            <thead><tr><th>日期</th><th>标题</th><th>来源</th><th>评分</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr v-for="r in profileStats.recent_recs" :key="r.rec_id">
+                <td class="muted">{{ r.date }}</td>
+                <td>{{ r.title }}</td>
+                <td class="muted">{{ r.source }}</td>
+                <td class="muted">{{ r.score }}</td>
+                <td>
+                  <span class="badge" :class="{ red: r.status === 'not_interested' }">{{ r.status }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 方向池编辑 -->
+        <div class="card mt16">
+          <div class="row mb8">
+            <h3 style="margin:0">🧭 采购方向池</h3>
+            <span class="spacer"></span>
+            <button class="small primary" @click="poolAdd">＋ 新增方向</button>
+            <button class="small primary" @click="poolSave" :disabled="poolSaving">{{ poolSaving ? '保存中…' : '💾 保存方向池' }}</button>
+          </div>
+          <p class="muted" style="font-size:0.85em">
+            方向池来自提问历史与热门源；权重 ≥1 的方向会参与每日采购配额。采购员决策依据。
+          </p>
+          <div v-for="(p, i) in poolEdit" :key="i" class="row" style="padding:6px 0;border-bottom:1px solid var(--border);gap:8px">
+            <input type="text" v-model="p.topic" placeholder="方向主题（如：自行车维修）" class="grow" style="flex:3" />
+            <input type="number" v-model.number="p.weight" min="0" max="10" style="width:70px" title="权重" />
+            <select v-model="p.source" style="width:110px">
+              <option value="question">提问</option>
+              <option value="hot">热门</option>
+              <option value="manual">手动</option>
+            </select>
+            <button class="small danger" @click="poolRemove(i)">✖</button>
+          </div>
+          <div v-if="!poolEdit.length" class="empty">方向池为空（可从提问历史 / 热门源补充）</div>
+        </div>
+      </template>
     </template>
 
     <!-- 自定义对话框（替代原生 prompt/confirm） -->
