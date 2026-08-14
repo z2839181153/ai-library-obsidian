@@ -7,6 +7,7 @@ const routes = [
   { path: '/book/:id', name: 'book', component: () => import('./views/BookDetail.vue'), meta: { title: '阅览室' } },
   { path: '/admin', name: 'admin', component: () => import('./views/Admin.vue'), meta: { title: '管理员' } },
   { path: '/purchaser', name: 'purchaser', component: () => import('./views/Purchaser.vue'), meta: { title: '采购员' } },
+  { path: '/archive', name: 'archive', component: () => import('./views/Archive.vue'), meta: { title: '档案馆' } },
   { path: '/settings', name: 'settings', component: () => import('./views/Settings.vue'), meta: { title: '设置' } },
 ]
 

@@ -86,6 +86,43 @@ class Repo:
             self.conn.execute("DELETE FROM books WHERE book_id=?", (book_id,))
             self.conn.commit()
 
+    # ---------- P4: 档案馆软删除（30 天可恢复） ----------
+
+    def soft_delete_book(self, book_id: str) -> dict:
+        """软删除：status→deleted + deleted_at 记录（书行保留，可恢复）。"""
+        book = self.get_book(book_id)
+        if not book:
+            raise ValueError(f"书不存在: {book_id}")
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE books SET status='deleted', deleted_at=?, updated_at=? WHERE book_id=?",
+                (now, now, book_id),
+            )
+            self.conn.commit()
+        return self.get_book(book_id)
+
+    def restore_book(self, book_id: str, prev_status: str | None = None) -> dict:
+        """恢复软删除书：deleted_at 清空，状态回补书室（默认 incoming）。"""
+        book = self.get_book(book_id)
+        if not book:
+            raise ValueError(f"书不存在: {book_id}")
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        status = prev_status or "incoming"
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE books SET status=?, deleted_at=NULL, updated_at=? WHERE book_id=?",
+                (status, now, book_id),
+            )
+            self.conn.commit()
+        return self.get_book(book_id)
+
+    def list_deleted_books(self) -> list[dict]:
+        """已删除（档案馆可恢复列表），按删除时间倒序。"""
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM books WHERE status='deleted' ORDER BY deleted_at DESC"
+        )]
+
     # ---------- chunks ----------
 
     def insert_chunk(self, chunk: dict) -> None:

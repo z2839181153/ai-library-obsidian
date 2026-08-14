@@ -141,8 +141,9 @@ def client(tmp_path):
     from fastapi import FastAPI
 
     from app import __version__
-    from app.api import (actions, ask, books, conversations, dashboard, distill,
-                         floors, health, index, ingest, purchase, settings, skills, starmap, ws)
+    from app.api import (actions, archive, ask, books, conversations, dashboard,
+                         distill, floors, health, index, ingest, purchase, settings,
+                         skills, starmap, ws)
 
     app = FastAPI(title="AI Library Test", version=__version__)
     app.state.library = state
@@ -160,6 +161,7 @@ def client(tmp_path):
     app.include_router(purchase.router, prefix="/api")
     app.include_router(conversations.router, prefix="/api")
     app.include_router(starmap.router, prefix="/api")
+    app.include_router(archive.router, prefix="/api")
     app.include_router(ws.router)
     with TestClient(app) as c:
         yield c

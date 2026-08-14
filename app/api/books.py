@@ -120,6 +120,28 @@ def confirm_book(req: Request, book_id: str, body: ConfirmRequest) -> dict:
     return result
 
 
+@router.post("/{book_id}/delete")
+def delete_book(req: Request, book_id: str) -> dict:
+    """主人删除书 → 档案馆（软删除，30 天可恢复）。"""
+    state = req.app.state.library
+    book = state.repo.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="书不存在")
+    if book.get("status") == "deleted":
+        raise HTTPException(status_code=400, detail="书已在档案馆")
+    deleted = state.repo.soft_delete_book(book_id)
+    state.repo.insert_action({
+        "agent": "owner",
+        "action_type": "delete",
+        "target_type": "book",
+        "target_id": book_id,
+        "params": {"title": book.get("title", book_id)},
+        "undo_params": {"prev_status": book.get("status") or "incoming"},
+        "reason": f"主人删除《{book.get('title', book_id)}》（可恢复 30 天）",
+    })
+    return {"ok": True, "book": deleted}
+
+
 @router.get("/{book_id}/content")
 def book_content(req: Request, book_id: str) -> dict:
     """原文阅读：按 chunk seq 分节返回（shelved 优先读 vault 文件）。"""

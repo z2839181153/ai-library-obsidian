@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS books (
   meta        TEXT,
   distill_slug TEXT,                -- P2: vault/skills/<slug> 蒸馏产物根
   distill_status TEXT,              -- P2: idle|running|awaiting|done|failed|blocked
+  deleted_at  TEXT,                 -- P4: 档案馆软删除时间（30 天可恢复）
   created_at  TEXT,
   updated_at  TEXT
 );
@@ -271,6 +272,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE books ADD COLUMN distill_slug TEXT")
     if "distill_status" not in bcols:
         conn.execute("ALTER TABLE books ADD COLUMN distill_status TEXT")
+    # 旧库迁移（P4）：books 补软删除时间
+    if "deleted_at" not in bcols:
+        conn.execute("ALTER TABLE books ADD COLUMN deleted_at TEXT")
 
     # 默认楼层种子（幂等）
     seed_default_floors(conn)

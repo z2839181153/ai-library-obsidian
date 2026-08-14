@@ -26,6 +26,7 @@ onUnmounted(() => {
         <router-link to="/starmap">占星室</router-link>
         <router-link to="/admin">管理员</router-link>
         <router-link to="/purchaser">采购员</router-link>
+        <router-link to="/archive">档案馆</router-link>
         <router-link to="/settings">设置</router-link>
       </nav>
       <div class="spacer"></div>
