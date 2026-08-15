@@ -97,7 +97,11 @@ class Indexer:
             all_texts: list[str] = []
             for _bid, _ing, chunks in pending:
                 all_texts.extend(c["content"] for c in chunks)
-            vecs = self.embed.embed_many(all_texts)
+            vecs: list[list[float]] | None = None
+            try:
+                vecs = self.embed.embed_many(all_texts)
+            except EmbeddingUnavailable:
+                vecs = None
 
             idx = 0
             for book_id, ingested, chunks in pending:
@@ -119,17 +123,21 @@ class Indexer:
                 }
                 self.repo.upsert_book(book)
                 rows: list[dict] = []
-                for chunk in chunks:
+                for chunk, vec in zip(chunks, vecs or [None] * len(chunks)):
                     chunk["token_cnt"] = len(chunk["content"])
                     chunk["fts_content"] = tokenize(chunk["content"])
                     chunk["vector_id"] = chunk["chunk_id"]
                     self.repo.insert_chunk(chunk)
-                    rows.append(
-                        {"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vecs[idx]}
-                    )
+                    if vec is not None:
+                        rows.append(
+                            {"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vec}
+                        )
                     idx += 1
                 self.repo.commit()
-                self.vec.upsert(rows)
+                if rows:
+                    self.vec.upsert(rows)
+                if vecs is None:
+                    self.repo.set_vector_pending(book_id, True)
 
         # 文件消失 → 删除
         for book_id, book in existing.items():
@@ -166,6 +174,10 @@ class Indexer:
 
         区别于 run()：书已登记在 books 表（status=incoming），这里只补 chunks
         与向量，不碰 books 行、不触发"文件消失删除"逻辑。
+
+        embedding 失败（无 key / 429 / 断网）→ 词法先行（FTS5 chunks 照写），
+        书标 vector_pending=1，向量可稍后 backfill_vectors 补（与 index_books
+        批量路径一致）。保证 classify / 阅览室等只依赖 chunks 的功能不卡死。
         """
         t0 = time.time()
         self.repo.delete_chunks_by_book(book_id)
@@ -173,17 +185,27 @@ class Indexer:
         chunks = chunk_text(ingested.clean_text, book_id)
         if not chunks:
             return {"chunks": 0, "elapsed_sec": round(time.time() - t0, 2)}
-        vecs = self.embed.embed_many([c["content"] for c in chunks])
+        vecs: list[list[float]] | None = None
+        try:
+            vecs = self.embed.embed_many([c["content"] for c in chunks])
+        except EmbeddingUnavailable:
+            vecs = None
         rows: list[dict] = []
-        for chunk, vec in zip(chunks, vecs):
+        for chunk, vec in zip(chunks, vecs or [None] * len(chunks)):
             chunk["token_cnt"] = len(chunk["content"])
             chunk["fts_content"] = tokenize(chunk["content"])
             chunk["vector_id"] = chunk["chunk_id"]
             self.repo.insert_chunk(chunk)
-            rows.append({"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vec})
+            if vec is not None:
+                rows.append({"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vec})
         self.repo.commit()
-        self.vec.upsert(rows)
-        return {"chunks": len(rows), "elapsed_sec": round(time.time() - t0, 2)}
+        if rows:
+            self.vec.upsert(rows)
+        if vecs is None:
+            self.repo.set_vector_pending(book_id, True)
+        return {"chunks": len(chunks), "vectors": len(rows),
+                "fallback": vecs is None,
+                "elapsed_sec": round(time.time() - t0, 2)}
 
     def index_books(self, infos: list[tuple[str, object]]) -> dict:
         """对多本书统一 chunk + 批量 embedding + 写入（P5-2 批量入馆提速）。
@@ -286,18 +308,26 @@ class Indexer:
         self.repo.delete_chunks_by_book(book_id)
         self.vec.delete_by_book(book_id)
 
-        # embedding（失败则中止该书，保留 DB 一致性由调用方保证）
-        vecs = self.embed.embed_many([c["content"] for c in chunks])
+        # embedding（失败则词法先行，向量后台补，与 index_book/index_books 一致）
+        vecs: list[list[float]] | None = None
+        try:
+            vecs = self.embed.embed_many([c["content"] for c in chunks])
+        except EmbeddingUnavailable:
+            vecs = None
 
         rows: list[dict] = []
-        for chunk, vec in zip(chunks, vecs):
+        for chunk, vec in zip(chunks, vecs or [None] * len(chunks)):
             chunk["token_cnt"] = len(chunk["content"])
             chunk["fts_content"] = tokenize(chunk["content"])
             chunk["vector_id"] = chunk["chunk_id"]
             self.repo.insert_chunk(chunk)
-            rows.append({"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vec})
+            if vec is not None:
+                rows.append({"chunk_id": chunk["chunk_id"], "book_id": book_id, "vector": vec})
         self.repo.commit()
-        self.vec.upsert(rows)
+        if rows:
+            self.vec.upsert(rows)
+        if vecs is None:
+            self.repo.set_vector_pending(book_id, True)
 
     # ---------- 完整性检测（P0 验收：索引损坏可检测） ----------
 

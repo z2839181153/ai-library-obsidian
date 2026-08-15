@@ -98,21 +98,30 @@ class ChatClient:
 
     def chat_json(self, prompt: str, system: str | None = None,
                   max_tokens: int = 4096) -> dict:
-        """让模型输出 JSON 并解析；解析失败抛 LLMOutputError。
+        """让模型输出 JSON 并解析；解析失败重试，最终失败抛 LLMOutputError。
 
         prompt 需自行要求"只输出 JSON"；这里不强依赖 response_format
         （ModelScope 免费模型兼容性不一），靠后处理容错。
         max_tokens 默认 4096：JSON 长输出（如图书卡片）不会被截断。
+
+        容错策略（实测：免费模型偶发输出被截断 / 尾随杂质）：
+        - 解析失败自动重试（最多 3 次），重试时放宽 max_tokens（≥8192），
+          避免大书卡片（长 summary）被截断成不完整 JSON；
+        - 每次重试都走 parse_json_loose（去围栏 / 花括号配对截断）。
         """
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        raw = self.chat(messages, temperature=0.2, max_tokens=max_tokens)
-        data = parse_json_loose(raw)
-        if data is None:
-            raise LLMOutputError(f"模型输出无法解析为 JSON: {raw[:300]}")
-        return data
+        last_raw: str | None = None
+        for attempt in range(3):
+            mt = max_tokens if attempt == 0 else max(max_tokens, 8192)
+            raw = self.chat(messages, temperature=0.2, max_tokens=mt)
+            data = parse_json_loose(raw)
+            if data is not None:
+                return data
+            last_raw = raw
+        raise LLMOutputError(f"模型输出无法解析为 JSON: {(last_raw or '')[:300]}")
 
     def chat_stream(self, messages: list[dict], temperature: float = 0.3,
                     max_tokens: int = 1024):
@@ -158,7 +167,15 @@ class ChatClient:
 
 
 def parse_json_loose(text: str) -> dict | None:
-    """宽松解析模型 JSON 输出：去围栏、找首尾花括号、失败返回 None。"""
+    """宽松解析模型 JSON 输出：去围栏、花括号配对截断，失败返回 None。
+
+    容错点（实测免费模型输出形态）：
+    - ```json ... ``` 围栏包裹；
+    - JSON 前后有说明文字/尾随杂质；
+    - summary 等字符串值内含 { }，简单 rfind('}') 会误截——改用深度扫描，
+      从第一个 '{' 起按配对闭合截取完整对象；
+    - 对象中途被截断（max_tokens 不够）→ 无法配对，返回 None（上层重试）。
+    """
     t = (text or "").strip()
     if not t:
         return None
@@ -170,11 +187,32 @@ def parse_json_loose(text: str) -> dict | None:
         return json.loads(t)
     except json.JSONDecodeError:
         pass
-    # 取第一个 { 到最后一个 }
-    start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end > start:
-        try:
-            return json.loads(t[start : end + 1])
-        except json.JSONDecodeError:
-            return None
+    # 深度扫描：从每个 '{' 起找配对闭合的完整对象
+    start = t.find("{")
+    while start != -1:
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(t)):
+            ch = t[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(t[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = t.find("{", start + 1)
     return None

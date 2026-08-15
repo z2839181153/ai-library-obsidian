@@ -101,7 +101,8 @@ class FakeLLM:
         for i in range(0, len(text), 4):
             yield text[i : i + 4]
 
-    def chat_json(self, prompt: str, system: str | None = None) -> dict:
+    def chat_json(self, prompt: str, system: str | None = None,
+                  max_tokens: int = 4096) -> dict:
         self.calls.append(prompt)
         if self.responder is not None:
             return self.responder(prompt, system)

@@ -132,7 +132,7 @@ class CardGenerator:
         prompt = self._build_prompt(book, chunks)
         self.last_prompt = prompt
         try:
-            return self.llm.chat_json(prompt, system=_CARD_SYSTEM)
+            return self.llm.chat_json(prompt, system=_CARD_SYSTEM, max_tokens=8192)
         except LLMUnavailable as e:
             self._last_llm_error = f"LLM 不可用: {e} | prompt_len={len(prompt)} | head={prompt[:120]!r}"
             return None
