@@ -56,7 +56,9 @@ export const useLibraryStore = defineStore('library', {
         if (msg.type === 'notice') {
           const text = this._noticeText(msg)
           if (text) this.toast(text, 'info')
-          if (msg.event === 'book_ingested') this.refreshDashboard()
+          if (['book_ingested', 'batch_ingested', 'batch_index_done'].includes(msg.event)) {
+            this.refreshDashboard()
+          }
         }
       }
       this.ws = ws
@@ -81,6 +83,15 @@ export const useLibraryStore = defineStore('library', {
       switch (msg.event) {
         case 'book_ingested':
           return `📥 新书入馆：${msg.title || msg.book_id}（补书室）`
+        case 'batch_ingested':
+          return `📥 批量入馆：${msg.count || 0} 本进入补书室`
+        case 'batch_index_progress':
+          return ''   // 逐本进度太吵，静默（dashboard 刷新覆盖）
+        case 'batch_index_done':
+          if (msg.error) return `⚠️ 批量索引失败：${msg.error}`
+          return msg.fallback
+            ? `⚡ 批量索引完成（词法先行，向量待补）：${msg.books || 0} 本`
+            : `⚡ 批量索引完成：${msg.books || 0} 本 / ${msg.chunks || 0} chunks`
         case 'distill_progress':
           return `🔬 蒸馏进度：${msg.book_id || ''} ${msg.stage || ''}`
         case 'skill_review_ready':

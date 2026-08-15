@@ -185,6 +185,98 @@ class Indexer:
         self.vec.upsert(rows)
         return {"chunks": len(rows), "elapsed_sec": round(time.time() - t0, 2)}
 
+    def index_books(self, infos: list[tuple[str, object]]) -> dict:
+        """对多本书统一 chunk + 批量 embedding + 写入（P5-2 批量入馆提速）。
+
+        infos: [(book_id, ingested), ...]
+        所有书 chunk 合并后一次 embed_many（内部按 64 条/批）——把 N 次 API
+        往返降为 N/64。
+        embedding 失败（无 key / 429 / 断网）→ 全部落词法索引（FTS5），
+        书标记 vector_pending=1（向量后台补），不阻断入馆。
+        """
+        t0 = time.time()
+        stats = {"books": 0, "chunks": 0, "vectors": 0, "fallback": False,
+                 "per_book": [], "elapsed_sec": 0.0}
+        if not infos:
+            return stats
+
+        plan: list[tuple[str, list[dict]]] = []
+        all_texts: list[str] = []
+        for book_id, ingested in infos:
+            self.repo.delete_chunks_by_book(book_id)
+            self.vec.delete_by_book(book_id)
+            chunks = chunk_text(ingested.clean_text, book_id)
+            if chunks:
+                plan.append((book_id, chunks))
+                all_texts.extend(c["content"] for c in chunks)
+
+        # 统一批量 embedding（一次 API 批量调用；失败则词法兜底）
+        vecs: list[list[float]] | None = None
+        try:
+            vecs = self.embed.embed_many(all_texts)
+        except EmbeddingUnavailable:
+            vecs = None
+
+        idx = 0
+        for book_id, chunks in plan:
+            rows: list[dict] = []
+            for chunk in chunks:
+                chunk["token_cnt"] = len(chunk["content"])
+                chunk["fts_content"] = tokenize(chunk["content"])
+                chunk["vector_id"] = chunk["chunk_id"]
+                self.repo.insert_chunk(chunk)
+                if vecs is not None:
+                    rows.append({"chunk_id": chunk["chunk_id"], "book_id": book_id,
+                                 "vector": vecs[idx]})
+                idx += 1
+            self.repo.commit()
+            if rows:
+                self.vec.upsert(rows)
+            if vecs is None:
+                self.repo.set_vector_pending(book_id, True)
+            stats["books"] += 1
+            stats["chunks"] += len(chunks)
+            stats["vectors"] += len(rows)
+            stats["per_book"].append(
+                {"book_id": book_id, "chunks": len(chunks), "vectors": len(rows)}
+            )
+
+        stats["fallback"] = vecs is None
+        stats["elapsed_sec"] = round(time.time() - t0, 2)
+        return stats
+
+    def backfill_vectors(self, book_ids: list[str] | None = None) -> dict:
+        """给向量待补的书补向量（embedding 恢复后调用，P5-2 兜底）。
+
+        从 chunks 表读回内容 → embed_many → LanceDB upsert → 清 vector_pending。
+        """
+        t0 = time.time()
+        if book_ids is None:
+            book_ids = self.repo.list_vector_pending()
+        stats = {"books": 0, "chunks": 0, "errors": [], "elapsed_sec": 0.0}
+        for book_id in book_ids:
+            rows = self.repo.conn.execute(
+                "SELECT chunk_id, content FROM chunks WHERE book_id=? ORDER BY seq",
+                (book_id,),
+            ).fetchall()
+            if not rows:
+                self.repo.set_vector_pending(book_id, False)
+                continue
+            try:
+                vecs = self.embed.embed_many([r["content"] for r in rows])
+            except EmbeddingUnavailable:
+                stats["errors"].append({"book_id": book_id, "error": "embedding 不可用"})
+                continue
+            self.vec.upsert(
+                [{"chunk_id": r["chunk_id"], "book_id": book_id, "vector": v}
+                 for r, v in zip(rows, vecs)]
+            )
+            self.repo.set_vector_pending(book_id, False)
+            stats["books"] += 1
+            stats["chunks"] += len(rows)
+        stats["elapsed_sec"] = round(time.time() - t0, 2)
+        return stats
+
     def _index_book(self, book_id: str, ingested) -> None:
         """对一本书执行 chunk + embedding + 写入（先清旧）。"""
         chunks = chunk_text(ingested.clean_text, book_id)
@@ -265,11 +357,25 @@ class Indexer:
             if misses:
                 issues.append(f"FTS 索引异常：{misses}/5 抽样 token 无法命中（索引可能损坏）")
 
-        # 3) 向量与 chunks 对齐
-        if counts["vectors"] >= 0 and counts["chunks"] != counts["vectors"]:
-            issues.append(
-                f"向量行数不一致: chunks={counts['chunks']} vectors={counts['vectors']}"
-            )
+        # 3) 向量与 chunks 对齐（vector_pending 的书允许词法先行，向量后台补）
+        if counts["vectors"] >= 0:
+            pending_ids = set(self.repo.list_vector_pending())
+            if pending_ids:
+                ph = ",".join("?" for _ in pending_ids)
+                pending_chunks = self.repo.conn.execute(
+                    f"SELECT COUNT(*) c FROM chunks WHERE book_id IN ({ph})",
+                    list(pending_ids),
+                ).fetchone()["c"]
+                counts["pending_vectors"] = pending_chunks
+                if (counts["chunks"] - pending_chunks) != counts["vectors"]:
+                    issues.append(
+                        f"向量行数不一致: chunks={counts['chunks']} "
+                        f"(含向量待补 {pending_chunks}) vectors={counts['vectors']}"
+                    )
+            elif counts["chunks"] != counts["vectors"]:
+                issues.append(
+                    f"向量行数不一致: chunks={counts['chunks']} vectors={counts['vectors']}"
+                )
 
         # 4) archive 原始文件存在
         missing = 0
@@ -281,7 +387,18 @@ class Indexer:
         if missing:
             issues.append(f"{missing} 个 archive 原始文件缺失")
 
-        rebuild_required = (not counts["fts_ok"]) or counts["chunks"] != counts["vectors"]
+        # 向量待补的书（词法先行）不计入"chunks≠vectors"的重建判断
+        pending_ids = set(self.repo.list_vector_pending())
+        pending_chunks = 0
+        if pending_ids:
+            ph = ",".join("?" for _ in pending_ids)
+            pending_chunks = self.repo.conn.execute(
+                f"SELECT COUNT(*) c FROM chunks WHERE book_id IN ({ph})",
+                list(pending_ids),
+            ).fetchone()["c"]
+        rebuild_required = ((not counts["fts_ok"])
+                            or (counts["vectors"] >= 0
+                                and (counts["chunks"] - pending_chunks) != counts["vectors"]))
         return {
             "ok": not issues and not rebuild_required,
             "rebuild_required": rebuild_required,

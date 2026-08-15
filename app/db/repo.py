@@ -22,6 +22,7 @@ class Repo:
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
         self._write_lock = threading.RLock()  # 单写入者（设计文档 §6.9）
+        self._last_read_dt: Optional[datetime.datetime] = None  # 最近阅读时间单调守卫（防同毫秒并列）
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -92,10 +93,16 @@ class Repo:
     def mark_book_read(self, book_id: str, when: str | None = None) -> None:
         """记录阅读时间（阅览室打开原文时调用）。不影响 updated_at 排序。
 
-        毫秒精度：连续读两本书也能分出先后（recent_read 排序依据）。
+        毫秒精度 + 单调推进：连续读两本书也能分出先后（recent_read 排序依据）。
+        Windows 系统时钟粒度粗（~15.6ms），同一 tick 内多次 now() 会返回相同值，
+        导致 last_read_at 并列、recent_read 排序不稳定——此处保证同进程内
+        时间戳严格递增。
         """
         if when is None:
             now = datetime.datetime.now()
+            if self._last_read_dt is not None and now <= self._last_read_dt:
+                now = self._last_read_dt + datetime.timedelta(milliseconds=1)
+            self._last_read_dt = now
             when = now.strftime("%Y-%m-%dT%H:%M:%S") + f".{now.microsecond // 1000:03d}"
         with self._write_lock:
             self.conn.execute(
@@ -103,6 +110,23 @@ class Repo:
                 (when, book_id),
             )
             self.conn.commit()
+
+    # ---------- P5-2: 向量待补标记（批量入馆 embedding 失败词法先行） ----------
+
+    def set_vector_pending(self, book_id: str, flag: bool) -> None:
+        """标记/清除"向量待补"。词法索引已就绪但向量缺失时置 1。"""
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE books SET vector_pending=? WHERE book_id=?",
+                (1 if flag else 0, book_id),
+            )
+            self.conn.commit()
+
+    def list_vector_pending(self) -> list[str]:
+        """返回向量待补的书（未删除）。"""
+        return [r["book_id"] for r in self.conn.execute(
+            "SELECT book_id FROM books WHERE vector_pending=1 AND status != 'deleted'"
+        )]
 
     # ---------- P4: 档案馆软删除（30 天可恢复） ----------
 

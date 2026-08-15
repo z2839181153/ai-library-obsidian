@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS books (
   distill_status TEXT,              -- P2: idle|running|awaiting|done|failed|blocked
   deleted_at  TEXT,                 -- P4: 档案馆软删除时间（30 天可恢复）
   last_read_at TEXT,                -- P5: 最近阅读时间（阅览室"继续阅读"）
+  vector_pending INTEGER DEFAULT 0, -- P5-2: 批量入馆 embedding 失败先落词法索引，向量待后台补
   created_at  TEXT,
   updated_at  TEXT
 );
@@ -279,6 +280,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
     # 旧库迁移（P5）：books 补最近阅读时间
     if "last_read_at" not in bcols:
         conn.execute("ALTER TABLE books ADD COLUMN last_read_at TEXT")
+    # 旧库迁移（P5-2）：books 补向量待补标记（批量入馆词法先行兜底）
+    if "vector_pending" not in bcols:
+        conn.execute("ALTER TABLE books ADD COLUMN vector_pending INTEGER DEFAULT 0")
 
     # 默认楼层种子（幂等）
     seed_default_floors(conn)

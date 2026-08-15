@@ -4,11 +4,16 @@ import { useRouter } from 'vue-router'
 import { useLibraryStore } from '../stores/library'
 import { api } from '../api'
 import echarts from '../echarts'
+import BatchIngestDialog from '../components/BatchIngestDialog.vue'
 
 const store = useLibraryStore()
 const router = useRouter()
 const uploading = ref(false)
 const uploadMsg = ref('')
+
+// P5-2 批量入馆
+const batchVisible = ref(false)
+const batchPreset = ref([])
 
 const d = computed(() => store.dashboard || {})
 const health = computed(() => d.value.health || {})
@@ -79,8 +84,21 @@ function onFile(e) {
 }
 function onDrop(e) {
   e.preventDefault()
-  const file = e.dataTransfer?.files?.[0]
-  if (file) upload(file)
+  const list = Array.from(e.dataTransfer?.files || [])
+  if (list.length > 1) {
+    // 多文件 → 批量入馆对话框（预填）
+    batchPreset.value = list
+    batchVisible.value = true
+  } else if (list.length === 1) {
+    upload(list[0])
+  }
+}
+function openBatch() {
+  batchPreset.value = []
+  batchVisible.value = true
+}
+function onBatchDone() {
+  store.refreshDashboard()
 }
 async function upload(file) {
   uploading.value = true
@@ -159,6 +177,7 @@ async function upload(file) {
           📥 扔书入馆
           <input type="file" style="display:none" @change="onFile" accept=".md,.markdown,.txt,.html,.htm,.pdf" />
         </label>
+        <button @click="openBatch">📦 批量入馆（≤10 本）</button>
         <button @click="router.push('/floors')">📚 打开补书室</button>
         <button @click="router.push('/admin')">💬 去提问</button>
         <button @click="router.push('/purchaser')">🛒 采购员</button>
@@ -168,7 +187,7 @@ async function upload(file) {
         style="border:2px dashed var(--border);border-radius:10px;padding:18px;text-align:center;color:var(--ink-soft)"
         @dragover.prevent @drop="onDrop"
       >
-        或把文件拖到这里（md / txt / html / pdf）
+        或把文件拖到这里（md / txt / html / pdf；多文件自动进入批量入馆）
       </div>
       <div v-if="uploading" class="mt8">上传中…</div>
       <div v-if="uploadMsg" class="mt8" style="color:var(--accent)">{{ uploadMsg }}</div>
@@ -204,5 +223,8 @@ async function upload(file) {
         </div>
       </div>
     </div>
+
+    <!-- P5-2 批量入馆对话框 -->
+    <BatchIngestDialog :visible="batchVisible" :preset="batchPreset" @close="batchVisible = false" @done="onBatchDone" />
   </div>
 </template>

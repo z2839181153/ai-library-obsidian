@@ -43,6 +43,8 @@ export const api = {
   put: (url, body, opts) => request('PUT', url, body, false, opts),
   del: (url, opts) => request('DELETE', url, undefined, false, opts),
   upload: (url, formData, opts) => request('POST', url, formData, true, opts),
+  ingestBatch: (formData, opts) =>
+    request('POST', '/api/ingest/batch', formData, true, opts),
 
   // 快捷端点
   dashboard: () => request('GET', '/api/dashboard'),
