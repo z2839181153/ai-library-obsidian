@@ -1,0 +1,4 @@
+﻿# AI 图书馆 · 桌面壳依赖（P5-1）
+pywebview>=6.0
+pystray>=0.19
+Pillow>=10.0
