@@ -160,6 +160,43 @@ class Shelver:
         self.repo.set_action_status(act["act_id"], "undone")
         return {"book_id": book_id, "undone": True}
 
+    def move_to_pending(self, book_id: str) -> dict:
+        """送回待定区：清空分类建议，状态 reviewing → incoming（卡片保留参考）。
+
+        主人对建议区的书不满意时点"送回待定区"——清空 suggest_*、解除
+        card_path 关联（catalog_cards 记录与 vault/catalog/bk_*.md 文件保留，
+        重新生成建议时会覆盖），书回到"刚入馆"的干净状态。
+        """
+        book = self.repo.get_book(book_id)
+        if not book:
+            raise ValueError(f"书不存在: {book_id}")
+        if book.get("status") != "reviewing":
+            raise ValueError(
+                f"书当前状态 {book.get('status')}，仅建议区（reviewing）的书可送回待定区"
+            )
+        now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        self.repo.conn.execute(
+            "UPDATE books SET suggest_floor='', suggest_room='', suggest_shelf='', "
+            "card_path='', status='incoming', updated_at=? WHERE book_id=?",
+            (now, book_id),
+        )
+        self.repo.commit()
+        act_id = self.repo.insert_action({
+            "agent": "owner",
+            "action_type": "unclassify",
+            "target_type": "book",
+            "target_id": book_id,
+            "params": {
+                "suggest_floor": book.get("suggest_floor") or "",
+                "suggest_room": book.get("suggest_room") or "",
+                "suggest_shelf": book.get("suggest_shelf") or "",
+            },
+            "undo_params": {},
+            "status": "done",
+            "reason": f"主人把《{book.get('title', book_id)}》从建议区送回待定区",
+        })
+        return {"book_id": book_id, "status": "incoming", "act_id": act_id}
+
     # ---------- 内部 ----------
 
     def _book_body(self, book_id: str) -> str:

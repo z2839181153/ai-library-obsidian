@@ -211,6 +211,14 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
   transition: background 0.15s;
 }
 .book-card .read-btn:hover { background: var(--accent, #3d5a45); color: #fff; }
+/* 删除按钮（已上架书卡片，阅读按钮旁）：危险操作红色系 */
+.book-card .read-btn.danger-btn {
+  background: rgba(229, 83, 75, 0.10);
+  color: #c0392b;
+  border-color: rgba(229, 83, 75, 0.35);
+  margin-top: auto;
+}
+.book-card .read-btn.danger-btn:hover { background: #c0392b; color: #fff; }
 /* P5-4 大厅"继续阅读"chip */
 .reading-chip {
   display: flex;

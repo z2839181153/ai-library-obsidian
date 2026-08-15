@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { useLibraryStore } from '../stores/library'
 import BookCard from '../components/BookCard.vue'
+import ModalDialog from '../components/ModalDialog.vue'
 
 const store = useLibraryStore()
 const router = useRouter()
@@ -120,11 +121,42 @@ async function confirmBook(book, pos) {
 }
 async function classifyBook(book) {
   try {
-    await api.classify(book.book_id)
+    // force=true：被送回待定区的书保留旧卡片（留作参考），重新生成建议需强制覆盖
+    await api.classify(book.book_id, true)
     store.toast(`🔖 《${book.title}》分类建议已生成`, 'info')
     await loadReviewRoom()
   } catch (e) {
     store.toast(`❌ ${e.message}`, 'error')
+  }
+}
+async function sendBackToPending(book) {
+  try {
+    await api.unclassify(book.book_id)
+    store.toast(`↩️ 《${book.title}》已送回待定区`, 'info')
+    await Promise.all([loadReviewRoom(), load(), store.refreshDashboard()])
+  } catch (e) {
+    store.toast(`❌ ${e.message}`, 'error')
+  }
+}
+async function onBookDeleted() {
+  // BookCard 删除已上架书后刷新：楼层列表 + 补书室 + 健康度
+  await Promise.all([load(), loadReviewRoom(), store.refreshDashboard()])
+}
+const pendingDelete = ref(null)   // 待删除的书（确认弹窗）
+const deleting = ref(false)
+async function confirmDeleteBook() {
+  if (!pendingDelete.value || deleting.value) return
+  deleting.value = true
+  const b = pendingDelete.value
+  try {
+    await api.deleteBook(b.book_id)
+    store.toast(`🗑 《${b.title}》已删除（可在档案馆恢复 30 天）`, 'info')
+    pendingDelete.value = null
+    await Promise.all([loadReviewRoom(), load(), store.refreshDashboard()])
+  } catch (e) {
+    store.toast(`❌ ${e.message}`, 'error')
+  } finally {
+    deleting.value = false
   }
 }
 </script>
@@ -174,6 +206,7 @@ async function classifyBook(book) {
                 </div>
                 <div class="row">
                   <button class="small primary grow" @click.stop="confirmBook(b, {})">✅ 确认上架</button>
+                  <button class="small" title="送回待定区（清空分类建议）" @click.stop="sendBackToPending(b)">↩️ 送回待定区</button>
                   <button class="small" @click.stop="router.push(`/book/${b.book_id}`)">📖 查看</button>
                 </div>
               </div>
@@ -189,6 +222,7 @@ async function classifyBook(book) {
                 <div class="meta">{{ b.media_type }} · 刚入馆</div>
                 <div class="row">
                   <button class="small primary grow" @click.stop="classifyBook(b)">🔖 生成分类建议</button>
+                  <button class="small" title="删除此书（进档案馆，30 天内可恢复）" @click.stop="pendingDelete = b">🗑 删除</button>
                   <button class="small" @click.stop="router.push(`/book/${b.book_id}`)">📖 查看</button>
                 </div>
               </div>
@@ -212,7 +246,7 @@ async function classifyBook(book) {
           <div v-if="activeTag" class="mb8 muted">「{{ activeTag }}」共 {{ visibleTagBooks.length }} 本</div>
           <div v-if="activeTag && !visibleTagBooks.length" class="empty">该标签下暂无书</div>
           <div v-else-if="activeTag" class="grid grid-3">
-            <BookCard v-for="b in visibleTagBooks" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" @read="(x) => router.push(`/book/${x.book_id}`)" />
+            <BookCard v-for="b in visibleTagBooks" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" @read="(x) => router.push(`/book/${x.book_id}`)" @deleted="onBookDeleted" />
           </div>
         </template>
 
@@ -231,10 +265,21 @@ async function classifyBook(book) {
           <div v-else-if="error" class="empty">{{ error }}</div>
           <div v-else-if="!books.length" class="empty">该区域还没有书</div>
           <div v-else class="grid grid-3">
-            <BookCard v-for="b in books" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" @read="(x) => router.push(`/book/${x.book_id}`)" />
+            <BookCard v-for="b in books" :key="b.book_id" :book="b" @open="(x) => router.push(`/book/${x.book_id}`)" @read="(x) => router.push(`/book/${x.book_id}`)" @deleted="onBookDeleted" />
           </div>
         </template>
       </div>
     </div>
+
+    <!-- 删除确认弹窗（待定区） -->
+    <ModalDialog
+      :visible="!!pendingDelete"
+      title="删除这本书？"
+      :message="pendingDelete ? `《${pendingDelete.title || pendingDelete.book_id}》将移入档案馆，30 天内可在档案馆恢复。` : ''"
+      ok-text="确认删除"
+      danger
+      @confirm="confirmDeleteBook"
+      @cancel="pendingDelete = null"
+    />
   </div>
 </template>

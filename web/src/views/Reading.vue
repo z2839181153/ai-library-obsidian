@@ -56,7 +56,7 @@ function openBook(b) {
       <div v-if="!recentReads.length" class="empty">还没有读过书——打开任意一本书后这里会出现</div>
       <div v-else class="grid grid-3">
         <BookCard v-for="b in recentReads" :key="b.book_id" :book="b"
-          @open="openBook" @read="openBook" />
+          @open="openBook" @read="openBook" @deleted="load" />
       </div>
     </div>
 
@@ -66,7 +66,7 @@ function openBook(b) {
       <div v-if="!recentBooks.length" class="empty">馆内还没有书——先去入馆吧</div>
       <div v-else class="grid grid-3">
         <BookCard v-for="b in recentBooks" :key="b.book_id" :book="b"
-          @open="openBook" @read="openBook" />
+          @open="openBook" @read="openBook" @deleted="load" />
       </div>
     </div>
   </div>

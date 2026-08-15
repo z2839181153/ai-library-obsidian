@@ -62,6 +62,8 @@ export const api = {
     request('GET', `/api/books/${id}/related?top_n=${topN}`, undefined, false, { timeout: 15000 }),
   classify: (id, force = false, opts = {}) => request('POST', `/api/books/${id}/classify`, { force }, false, opts),
   confirmShelve: (id, pos = {}) => request('POST', `/api/books/${id}/confirm`, pos),
+  unclassify: (id) => request('POST', `/api/books/${id}/unclassify`, {}),
+  deleteBook: (id) => request('POST', `/api/books/${id}/delete`, {}),
   ask: (query, cvId = null, topK = 20, opts = {}) =>
     request('POST', '/api/ask', { query, top_k: topK, cv_id: cvId }, false, opts),
   search: (query, topK = 20) => request('POST', '/api/search', { query, top_k: topK }),

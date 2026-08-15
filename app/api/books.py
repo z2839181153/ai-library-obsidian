@@ -157,6 +157,19 @@ def confirm_book(req: Request, book_id: str, body: ConfirmRequest) -> dict:
     return result
 
 
+@router.post("/{book_id}/unclassify")
+def unclassify_book(req: Request, book_id: str) -> dict:
+    """送回待定区：清空分类建议，状态 reviewing → incoming（补书室建议区 → 待定区）。"""
+    state = req.app.state.library
+    if not state.repo.get_book(book_id):
+        raise HTTPException(status_code=404, detail="书不存在")
+    try:
+        result = state.shelver.move_to_pending(book_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return result
+
+
 @router.post("/{book_id}/delete")
 def delete_book(req: Request, book_id: str) -> dict:
     """主人删除书 → 档案馆（软删除，30 天可恢复）。"""
