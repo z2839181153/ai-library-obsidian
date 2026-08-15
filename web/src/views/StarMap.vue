@@ -23,6 +23,7 @@ const typeFilter = ref({
 // 着色模式：type（按类型）| time（按入馆时间）
 const colorMode = ref('type')
 const showUnplaced = ref(false)  // 只看补书室未归位星（默认全图）
+const showBookEdges = ref(true)  // 显示书↔书边（P5-5）
 
 const TYPE_COLORS = {
   book: '#3d5a45',
@@ -37,6 +38,19 @@ const TYPE_LABELS = {
   theme: '🗂 主题',
   archive: '🗄 档案',
   conversation: '💬 对话',
+}
+
+// P5-5：书↔书边样式（按关系类型着色；semantic 线宽映射相似度）
+const BOOK_EDGE_STYLES = {
+  semantic:   { color: '#2f9e8f', width: 2.2,  dashed: false, label: '内容相似' },
+  same_room:  { color: '#5a7a9a', width: 1.4,  dashed: false, label: '同房间' },
+  same_tag:   { color: '#8a6ab0', width: 1.2,  dashed: false, label: '同标签' },
+  references: { color: '#c07a3a', width: 1.2,  dashed: true,  label: '引用' },
+}
+const RELATION_LABELS = {
+  ...Object.fromEntries(Object.entries(BOOK_EDGE_STYLES).map(([k, v]) => [k, v.label])),
+  shelved_in: '上架归属', suggested: '建议归属', raw_copy: '原始副本',
+  distilled: '蒸馏来源', archived: '归档', referenced: '对话引用',
 }
 
 function timeColor(ts) {
@@ -63,7 +77,10 @@ const visibleNodes = computed(() => {
 
 const summary = computed(() => {
   const c = data.value.counts || {}
-  return Object.entries(TYPE_LABELS).map(([k, label]) => `${label} ${c[k] ?? 0}`).join(' · ')
+  const be = data.value.book_edges || {}
+  let s = Object.entries(TYPE_LABELS).map(([k, label]) => `${label} ${c[k] ?? 0}`).join(' · ')
+  if (be.total) s += ` · 🔗 书↔书边 ${be.total}（语义 ${be.semantic ?? 0} / 同房间 ${be.same_room ?? 0} / 同标签 ${be.same_tag ?? 0} / 引用 ${be.references ?? 0}）`
+  return s
 })
 
 function render() {
@@ -105,17 +122,45 @@ function render() {
     }
     return item
   })
-  const linkData = links.map((l) => ({
-    source: l.source,
-    target: l.target,
-    lineStyle: { width: 1, color: '#c9bfa8', curveness: 0.15, opacity: 0.6 },
-  }))
+  const linkData = links
+    .filter((l) => showBookEdges.value || !BOOK_EDGE_STYLES[l.relation])
+    .map((l) => {
+      const st = BOOK_EDGE_STYLES[l.relation]
+      if (st) {
+        // 书↔书边：按关系类型着色；semantic 线宽映射相似度（越像越粗）
+        const w = l.relation === 'semantic'
+          ? Math.min(6, 1 + 5 * (l.similarity || 0.4))
+          : st.width
+        return {
+          source: l.source,
+          target: l.target,
+          relation: l.relation,
+          similarity: l.similarity,
+          lineStyle: {
+            width: w, color: st.color, curveness: 0.15, opacity: 0.8,
+            type: st.dashed ? 'dashed' : 'solid',
+          },
+        }
+      }
+      return {
+        source: l.source,
+        target: l.target,
+        relation: l.relation,
+        lineStyle: { width: 1, color: '#c9bfa8', curveness: 0.15, opacity: 0.6 },
+      }
+    })
   chart.setOption({
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
       formatter: (p) => {
-        if (p.dataType === 'edge') return ''
+        if (p.dataType === 'edge') {
+          const l = p.data
+          const label = RELATION_LABELS[l.relation] || l.relation || ''
+          let s = `🔗 ${label}`
+          if (l.similarity != null) s += `<br/>相似度：${(l.similarity * 100).toFixed(0)}%`
+          return s
+        }
         const n = p.data
         let s = `<b>${TYPE_LABELS[n._type] || n.category || n._type}</b> ${n.name}<br/>`
         if (n._status) s += `状态：${n._status}<br/>`
@@ -193,6 +238,9 @@ onUnmounted(() => {
         <label class="chk">
           <input type="checkbox" v-model="showUnplaced" @change="render()" /> 只看未归位星
         </label>
+        <label class="chk">
+          <input type="checkbox" v-model="showBookEdges" @change="render()" /> 书↔书边
+        </label>
       </div>
       <div class="muted mt8">{{ summary }}</div>
     </div>
@@ -201,7 +249,15 @@ onUnmounted(() => {
     <div v-else-if="loading" class="loading">加载星空图…</div>
     <div v-else class="card" style="padding:6px">
       <div ref="chartEl" style="width:100%;height:calc(100vh - 260px);min-height:420px"></div>
-      <div class="muted" style="padding:8px 10px">提示：拖拽节点可调整布局 · 点击书节点跳转阅览室 · 双击空白处放大</div>
+      <div class="muted" style="padding:8px 10px">
+        提示：拖拽节点可调整布局 · 点击书节点跳转阅览室 · 双击空白处放大<br/>
+        <span v-if="data.book_edges && data.book_edges.total">
+          <b>书↔书边</b>：<span style="color:#2f9e8f">▬ 内容相似</span>（线越粗越像）·
+          <span style="color:#5a7a9a">▬ 同房间</span> · <span style="color:#8a6ab0">▬ 同标签</span> ·
+          <span style="color:#c07a3a">┅ 引用</span>
+          <span class="muted">（语义边来源：{{ data.book_edges.semantic_source === 'lexical' ? '词法兜底（离线）' : '卡片向量' }}）</span>
+        </span>
+      </div>
     </div>
   </div>
 </template>
