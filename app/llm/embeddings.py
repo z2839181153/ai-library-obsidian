@@ -27,15 +27,18 @@ class EmbeddingClient:
     @property
     def client(self):
         if self._client is None:
-            if not self.cfg.modelscope.api_key:
+            # embedding 可用独立配置（embed_base_url/embed_api_key）；空=跟随 chat 配置
+            base_url = self.cfg.modelscope.embed_base_url or self.cfg.modelscope.base_url
+            api_key = self.cfg.modelscope.embed_api_key or self.cfg.modelscope.api_key
+            if not api_key:
                 raise EmbeddingUnavailable(
-                    "未配置 MODELSCOPE_API_KEY（环境变量或 data/secrets.json）"
+                    "未配置 embedding API key（环境变量 MODELSCOPE_API_KEY/EMBED_API_KEY 或 data/secrets.json）"
                 )
             from openai import OpenAI
 
             self._client = OpenAI(
-                base_url=self.cfg.modelscope.base_url,
-                api_key=self.cfg.modelscope.api_key,
+                base_url=base_url,
+                api_key=api_key,
             )
         return self._client
 

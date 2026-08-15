@@ -33,7 +33,9 @@ class LLMDistiller:
     def __init__(self, cfg: AppConfig, llm: ChatClient):
         self.cfg = cfg
         # 蒸馏用更强模型（settings.modelscope.distill_model）
-        self.llm = ChatClient(cfg, model=cfg.modelscope.distill_model)
+        # timeout=150s：DeepSeek 等 API 生成长结构化输出较慢（约 8 字符/s），
+        # 60s 默认超时在批量验证/长 SKILL.md 生成时容易误判超时。
+        self.llm = ChatClient(cfg, model=cfg.modelscope.distill_model, timeout=150.0)
 
     # ---------- 工具 ----------
 
@@ -83,6 +85,16 @@ class LLMDistiller:
     def _write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+    def _strip_fence(self, text: str) -> str:
+        """剥离模型输出外围的 ```markdown/```yaml/``` 围栏（LLM 常把全文包进代码块）。"""
+        t = text.strip()
+        m = re.match(r"^```(?:markdown|md|yaml|json)?\s*\n(.*?)\n```\s*$", t, re.S)
+        if m:
+            return m.group(1).strip()
+        # 只剥开头围栏（正文可能含代码块示例，不能剥结尾）
+        t = re.sub(r"^```(?:markdown|md|yaml|json)?\s*\n?", "", t, count=1)
+        return t.strip()
 
     # ---------- 阶段 0：整书理解 ----------
 
@@ -149,25 +161,41 @@ class LLMDistiller:
             self._write(ctx.out_root / "verified.md", "# 通过三重验证的单元\n\n（无候选）\n")
             return
         verified, rejected = [], []
-        batch = "\n\n".join(
-            f"- id: {it.get('id')}\n  title: {it.get('title')}\n  summary: {it.get('summary', '')[:300]}"
-            for it in all_items
-        )
-        verdict = self._chat(
-            "你是三重验证器（V1 跨域佐证 / V2 预测力 / V3 独特性）。对每个候选输出 JSON 数组："
-            '[{"id": "f01", "pass": true, "reason": "..."}]',
-            f"候选列表：\n{batch}\n\n逐个判定 V1/V2/V3 是否通过。只输出 JSON 数组。",
-        )
-        parsed = self._parse_verdicts(verdict)
-        by_id = {it.get("id"): it for it in all_items}
-        for v in parsed:
-            it = by_id.get(v.get("id"))
-            if it is None:
+        # 分批验证（每批 ≤3）：DeepSeek 等 API 生成 JSON 判定约 8 字符/s，
+        # 批次过大输出超时/被截断风险高（BATCH=6 实测 60s 超时）。
+        BATCH = 3
+        for start in range(0, len(all_items), BATCH):
+            batch_items = all_items[start : start + BATCH]
+            batch = "\n\n".join(
+                f"- id: {it.get('id')}\n  title: {it.get('title')}\n  summary: {it.get('summary', '')[:300]}"
+                for it in batch_items
+            )
+            verdict = self._chat(
+                "你是三重验证器（V1 跨域佐证 / V2 预测力 / V3 独特性）。对每个候选输出 JSON 数组："
+                '[{"id": "f01", "pass": true, "reason": "..."}]',
+                f"候选列表：\n{batch}\n\n逐个判定 V1/V2/V3 是否通过。只输出 JSON 数组。",
+            )
+            parsed = self._parse_verdicts(verdict)
+            if not parsed:
+                # 判定输出不可解析（截断/格式异常）→ 保守放行，避免链路卡死
+                for it in batch_items:
+                    verified.append({**it, "reason": "（判定输出不可解析，保守放行）"})
                 continue
-            if v.get("pass"):
-                verified.append(it)
-            else:
-                rejected.append({**it, "reason": v.get("reason", "")})
+            by_id = {it.get("id"): it for it in batch_items}
+            judged = set()
+            for v in parsed:
+                it = by_id.get(v.get("id"))
+                if it is None:
+                    continue
+                judged.add(v.get("id"))
+                if v.get("pass"):
+                    verified.append(it)
+                else:
+                    rejected.append({**it, "reason": v.get("reason", "")})
+            # 截断导致本批部分候选未获判定 → 保守放行
+            for it in batch_items:
+                if it.get("id") not in judged:
+                    verified.append({**it, "reason": "（未获判定，保守放行）"})
         self._write(ctx.out_root / "verified.md",
                     self._fmt_units(verified))
         rej_dir = ctx.out_root / "rejected"
@@ -189,13 +217,15 @@ class LLMDistiller:
                 "R 原文引用（≤150字，标注章节）/ I 方法论骨架（用自己的话）/ A1 书中案例 / "
                 "A2 触发场景（含语言信号与相邻 skill 区分）/ E 可执行步骤（含完成标准）/ B 边界。\n"
                 "frontmatter 含 name/description（description 必须写明'何时调用+何时不调用'）。\n"
-                "只输出 SKILL.md 全文。"
+                "格式硬性要求：① 六段标题必须写为 '## R — 原文引用' 形式（R/I/A1/A2/E/B 后跟空格和 em-dash '—'）；"
+                "② 不要用任何代码块围栏包裹全文（frontmatter 和正文直接裸输出）；"
+                "③ 文件以 --- frontmatter 开头。只输出 SKILL.md 全文。"
             )
             out = self._chat(
                 "你是 RIA++ 拆书专家，产出可执行 SKILL.md（六段齐全，遵循模板）。",
                 user,
             )
-            self._write(ctx.out_root / slug / "SKILL.md", out)
+            self._write(ctx.out_root / slug / "SKILL.md", self._strip_fence(out))
 
     # ---------- 阶段 3：链接 ----------
 
@@ -307,6 +337,7 @@ class LLMDistiller:
         return out
 
     def _parse_verdicts(self, text: str) -> list[dict]:
+        # 1) 完整 JSON 数组
         m = re.search(r"\[.*\]", text, re.S)
         if m:
             try:
@@ -315,7 +346,16 @@ class LLMDistiller:
                     return [d for d in data if isinstance(d, dict)]
             except json.JSONDecodeError:
                 pass
-        return []
+        # 2) 截断容错：逐对象解析（数组未闭合时仍能拿到前面的判定）
+        out = []
+        for obj in re.finditer(r"\{[^{}]*\}", text):
+            try:
+                d = json.loads(obj.group(0))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(d, dict) and d.get("id") is not None:
+                out.append(d)
+        return out
 
     def _load_verified(self, ctx) -> list[dict]:
         vp = ctx.out_root / "verified.md"

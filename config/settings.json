@@ -8,10 +8,15 @@
     "vault_dir": "vault"
   },
   "modelscope": {
-    "base_url": "https://api-inference.modelscope.cn/v1",
-    "chat_model": "deepseek-ai/DeepSeek-V4-Flash-0731",
-    "distill_model": "ZhipuAI/GLM-5.2",
-    "embed_model": "Qwen/Qwen3-Embedding-0.6B"
+    "base_url": "https://api.deepseek.com/v1",
+    "chat_model": "deepseek-v4-flash",
+    "distill_model": "deepseek-v4-flash",
+    "embed_model": "Qwen/Qwen3-Embedding-0.6B",
+    "embed_base_url": "https://api-inference.modelscope.cn/v1",
+    "chat_retries": 8,
+    "chat_retry_base": 3.0,
+    "chat_retry_max": 60.0,
+    "chat_retry_on_429": false
   },
   "ollama": {
     "base_url": "http://127.0.0.1:11434",

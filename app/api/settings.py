@@ -61,12 +61,15 @@ def get_settings(req: Request) -> dict:
             "chat_model": cfg.modelscope.chat_model,
             "distill_model": cfg.modelscope.distill_model,
             "embed_model": cfg.modelscope.embed_model,
+            "embed_base_url": cfg.modelscope.embed_base_url,
             "chat_retries": cfg.modelscope.chat_retries,
             "chat_retry_base": cfg.modelscope.chat_retry_base,
             "chat_retry_max": cfg.modelscope.chat_retry_max,
             "chat_retry_on_429": cfg.modelscope.chat_retry_on_429,
             "api_key_masked": _mask_key(cfg.modelscope.api_key),
             "api_key_set": bool(cfg.modelscope.api_key),
+            "embed_api_key_masked": _mask_key(cfg.modelscope.embed_api_key),
+            "embed_api_key_set": bool(cfg.modelscope.embed_api_key),
         },
         "ollama": {
             "base_url": cfg.ollama.base_url,
@@ -97,7 +100,7 @@ def put_settings(req: Request, body: SettingsUpdate) -> dict:
 
     if body.modelscope is not None:
         ms = raw.setdefault("modelscope", {})
-        for k in ("base_url", "chat_model", "distill_model", "embed_model"):
+        for k in ("base_url", "chat_model", "distill_model", "embed_model", "embed_base_url"):
             v = body.modelscope.get(k)
             if v:
                 ms[k] = v
@@ -112,17 +115,30 @@ def put_settings(req: Request, body: SettingsUpdate) -> dict:
             ms["chat_retry_on_429"] = bool(body.modelscope["chat_retry_on_429"])
             cfg.modelscope.chat_retry_on_429 = ms["chat_retry_on_429"]
         # API key：空值=不改；非空写 data/secrets.json（不入 git）
+        #   api_key        → chat/distill（secrets.deepseek_api_key）
+        #   embed_api_key  → embedding（secrets.modelscope_api_key）
         key = (body.modelscope.get("api_key") or "").strip()
         if key:
             secrets_path = cfg.paths.data_dir / "secrets.json"
             secrets = {}
             if secrets_path.exists():
                 secrets = json.loads(secrets_path.read_text(encoding="utf-8"))
-            secrets["modelscope_api_key"] = key
+            secrets["deepseek_api_key"] = key
             secrets_path.write_text(
                 json.dumps(secrets, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             cfg.modelscope.api_key = key
+        emb_key = (body.modelscope.get("embed_api_key") or "").strip()
+        if emb_key:
+            secrets_path = cfg.paths.data_dir / "secrets.json"
+            secrets = {}
+            if secrets_path.exists():
+                secrets = json.loads(secrets_path.read_text(encoding="utf-8"))
+            secrets["modelscope_api_key"] = emb_key
+            secrets_path.write_text(
+                json.dumps(secrets, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            cfg.modelscope.embed_api_key = emb_key
 
     if body.ollama is not None:
         ol = raw.setdefault("ollama", {})

@@ -122,6 +122,18 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     """解析 --- 围栏 frontmatter，返回 (meta, body)。无 frontmatter 返回 ({}, text)。"""
     m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S)
     if not m:
+        # 容错：LLM 常只写开头 --- 漏闭合 → 解析开头 --- 到第一个空行/正文标题
+        m2 = re.match(r"^---\s*\n(.*?)(?:\n\s*\n|\n(?=#)|\Z)", text, re.S)
+        if m2:
+            meta_text = m2.group(1)
+            rest = text[m2.end():]
+            try:
+                meta = yaml.safe_load(meta_text) or {}
+            except yaml.YAMLError:
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            return meta, rest
         return {}, text
     meta_text, body = m.group(1), m.group(2)
     try:
@@ -134,10 +146,12 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def _find_sections(body: str) -> list[str]:
-    """按 '## X —' 标题找六段。"""
+    """按 '## X' 标题找六段（兼容 '## R — 原文引用' / '## R 原文引用' / '## R: ...'）。"""
     found = set()
-    for m in re.finditer(r"^##\s+([A-Za-z0-9]+)\s*[—\-–]", body, re.M):
-        found.add(m.group(1).upper())
+    for m in re.finditer(r"^##\s+([A-Za-z0-9]+)", body, re.M):
+        seg = m.group(1).upper()
+        if seg in REQUIRED_SECTIONS:
+            found.add(seg)
     return [s for s in REQUIRED_SECTIONS if s not in found]
 
 

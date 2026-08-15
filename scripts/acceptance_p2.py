@@ -37,6 +37,7 @@ BOOK_TEXT = """# 决策的智慧
 
 def main() -> int:
     use_real = "--real" in sys.argv
+    use_real_llm = "--real-llm" in sys.argv
     td = tempfile.TemporaryDirectory()
     state = None
     t_start = time.time()
@@ -51,9 +52,18 @@ def main() -> int:
         src.mkdir(parents=True)
         (src / "决策的智慧.md").write_text(BOOK_TEXT, encoding="utf-8")
 
-        # 2) 构建状态（离线 Fake / 真实 API）
+        # 2) 构建状态（离线 Fake / 真实 API / 混合：LLM 真 + embedding 假）
         if use_real:
             state = build_state(cfg)
+            from app.distill.executor_llm import LLMDistiller
+
+            state.distill_executor = LLMDistiller(state.cfg, state.llm)
+        elif use_real_llm:
+            # 混合模式：LLM 走真实 API（DeepSeek 官方），embedding 用 Fake（离线语义）
+            # 用途：embedding 服务不可用（如 ModelScope 429）时仍可验证蒸馏链路与产物质量
+            from tests.conftest import FakeEmbed
+
+            state = build_state(cfg, embed=FakeEmbed())
             from app.distill.executor_llm import LLMDistiller
 
             state.distill_executor = LLMDistiller(state.cfg, state.llm)
@@ -89,8 +99,8 @@ def main() -> int:
         assert r["ok"], r
         print(f"[4] 蒸馏启动 OK  slug={r['book_slug']}")
 
-        # 7) 等待完成（真实 API 每次调用 5-40s，全流程可能 10+ 分钟）
-        deadline = time.time() + 1500
+        # 7) 等待完成（真实 API 每次调用 5-40s，技能多时全流程可能 30+ 分钟）
+        deadline = time.time() + 2400
         last_print = 0.0
         while time.time() < deadline:
             st = state.repo.get_book(book_id)["distill_status"]

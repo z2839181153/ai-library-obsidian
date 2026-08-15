@@ -45,6 +45,8 @@ class ModelScopeConfig:
     chat_model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"
     distill_model: str = "ZhipuAI/GLM-5.2"
     embed_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    embed_base_url: str = ""   # embedding 独立 base_url（空=跟随 base_url）；可指向 ModelScope 免费 API
+    embed_api_key: str = ""    # embedding 独立 API key（空=跟随 api_key）
     chat_retries: int = 8              # LLM 失败/空响应最大重试次数（可配）
     chat_retry_base: float = 3.0       # 重试间隔基数（s）：3,6,12,... 递增
     chat_retry_max: float = 60.0       # 重试间隔上限（s）
@@ -97,6 +99,8 @@ class AppConfig:
         cfg.modelscope.chat_model = ms.get("chat_model", cfg.modelscope.chat_model)
         cfg.modelscope.distill_model = ms.get("distill_model", cfg.modelscope.distill_model)
         cfg.modelscope.embed_model = ms.get("embed_model", cfg.modelscope.embed_model)
+        cfg.modelscope.embed_base_url = ms.get("embed_base_url", cfg.modelscope.embed_base_url)
+        cfg.modelscope.embed_api_key = ms.get("embed_api_key", cfg.modelscope.embed_api_key)
         cfg.modelscope.chat_retries = int(ms.get("chat_retries", cfg.modelscope.chat_retries))
         cfg.modelscope.chat_retry_base = float(ms.get("chat_retry_base", cfg.modelscope.chat_retry_base))
         cfg.modelscope.chat_retry_max = float(ms.get("chat_retry_max", cfg.modelscope.chat_retry_max))
@@ -116,9 +120,18 @@ class AppConfig:
         cfg.distill.reject_block = int(ds.get("reject_block", cfg.distill.reject_block))
 
         # 密钥：环境变量优先，其次 data/secrets.json（不入库）
-        cfg.modelscope.api_key = os.environ.get(
-            "MODELSCOPE_API_KEY",
-            _load_json(cfg.paths.data_dir / "secrets.json").get("modelscope_api_key", ""),
+        #   api_key        → chat/distill（如 DeepSeek 官方 key，secrets.deepseek_api_key）
+        #   embed_api_key  → embedding（默认 ModelScope key，secrets.modelscope_api_key）
+        secrets = _load_json(cfg.paths.data_dir / "secrets.json")
+        cfg.modelscope.api_key = (
+            os.environ.get("MODELSCOPE_API_KEY")
+            or secrets.get("deepseek_api_key")
+            or secrets.get("modelscope_api_key", "")
+        )
+        cfg.modelscope.embed_api_key = (
+            cfg.modelscope.embed_api_key
+            or os.environ.get("EMBED_API_KEY")
+            or secrets.get("modelscope_api_key", "")
         )
         return cfg
 
