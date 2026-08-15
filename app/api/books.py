@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/books", tags=["books"])
@@ -347,11 +349,77 @@ def related(req: Request, book_id: str, top_n: int = 6) -> dict:
     }
 
 
+# ---------- P5-3 离线读原文 ----------
+
+def _resolve_raw_path(state, book: dict) -> Path | None:
+    """定位 archive/raw 不可变副本：raw_path（绝对/相对 data_dir）+ content_hash 兜底。
+
+    raw 文件是内容寻址的（archive/raw/<h2>/<hash>，无扩展名）。
+    """
+    if not book:
+        return None
+    raw = book.get("raw_path") or ""
+    if raw:
+        p = Path(raw)
+        if p.exists():
+            return p
+        cand = state.cfg.paths.data_dir / raw
+        if cand.exists():
+            return cand
+    h = book.get("content_hash")
+    if h:
+        p = state.cfg.paths.data_dir / "archive" / "raw" / h[:2] / h
+        if p.exists():
+            return p
+    return None
+
+
+def _split_sections(text: str) -> list[dict]:
+    """按 `## ` 标题切分文本为阅读节；无标题时整段为"全文"。"""
+    sections: list[dict] = []
+    cur, cur_title = [], "全文"
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if cur:
+                sections.append({"title": cur_title, "content": "\n".join(cur).strip()})
+            cur_title = line[3:].strip()
+            cur = []
+        else:
+            cur.append(line)
+    if cur:
+        sections.append({"title": cur_title, "content": "\n".join(cur).strip()})
+    return sections
+
+
+def _parse_raw_text(raw: Path, media_type: str) -> str:
+    """按 media_type 解析原始副本（raw 无扩展名，不能按后缀路由）。
+
+    返回清洗前原文文本；解析失败返回 ""（调用方降级为空正文）。
+    """
+    from app.ingest.parsers import parse_html, parse_markdown, parse_pdf, parse_text
+
+    mt = (media_type or "").lower()
+    try:
+        if mt in ("pdf",):
+            return parse_pdf(raw).text
+        if mt in ("html", "htm", "web"):
+            return parse_html(raw).text
+        if mt in ("markdown", "md"):
+            return parse_markdown(raw).text
+        if mt in ("text", "txt", "chat", "other", ""):
+            return parse_text(raw).text
+    except Exception:  # noqa: BLE001  解析失败不阻塞阅读
+        return ""
+    return ""
+
+
 @router.get("/{book_id}/content")
 def book_content(req: Request, book_id: str) -> dict:
-    """原文阅读：按 chunk seq 分节返回（shelved 优先读 vault 文件）。
+    """原文阅读：vault book.md → chunks 拼接 → archive/raw 原始副本（P5-3 离线兜底）。
 
     读取即记录 last_read_at（P5-4 阅览室"继续阅读"依据）。
+    纯本地读取，不调 LLM——无额度/断网场景正文照常可读。
+    返回 source：vault | chunks | raw（前端据此显示"离线原文"徽标）。
     """
     state = req.app.state.library
     book = state.repo.get_book(book_id)
@@ -364,31 +432,79 @@ def book_content(req: Request, book_id: str) -> dict:
     except Exception:  # noqa: BLE001 阅读标记失败不影响阅读
         pass
 
-    # shelved：读 vault 的 book.md；未上架：chunks 拼接
+    # 1) 已上架：读 vault 的 book.md
     text = None
     if book.get("vault_path"):
         vp = state.cfg.paths.vault_dir / book["vault_path"] / "book.md"
         if vp.exists():
             text = vp.read_text(encoding="utf-8")
 
-    sections = []
+    sections: list[dict] = []
+    source = "vault"
     if text is not None:
-        cur, cur_title = [], "全文"
-        for line in text.splitlines():
-            if line.startswith("## "):
-                if cur:
-                    sections.append({"title": cur_title, "content": "\n".join(cur).strip()})
-                cur_title = line[3:].strip()
-                cur = []
-            else:
-                cur.append(line)
-        if cur:
-            sections.append({"title": cur_title, "content": "\n".join(cur).strip()})
+        sections = _split_sections(text)
     else:
+        # 2) 未上架：优先 chunks 拼接
         rows = state.repo.conn.execute(
             "SELECT section, content, seq FROM chunks WHERE book_id=? ORDER BY seq", (book_id,)
         ).fetchall()
-        for r in rows:
-            sections.append({"title": r["section"] or f"片段{r['seq']}", "content": r["content"]})
+        if rows:
+            source = "chunks"
+            for r in rows:
+                sections.append({"title": r["section"] or f"片段{r['seq']}",
+                                 "content": r["content"]})
+        else:
+            # 3) 无 chunks（未编目/未索引）：读 archive/raw 原始副本（P5-3 离线兜底）
+            raw = _resolve_raw_path(state, book)
+            raw_text = _parse_raw_text(raw, book.get("media_type") or "") if raw else ""
+            if raw_text.strip():
+                source = "raw"
+                sections = _split_sections(raw_text)
+                if not sections:
+                    sections = [{"title": "全文", "content": raw_text.strip()}]
 
-    return {"book_id": book_id, "title": book.get("title"), "sections": sections}
+    return {
+        "book_id": book_id,
+        "title": book.get("title"),
+        "sections": sections,
+        "source": source,
+        "raw_available": _resolve_raw_path(state, book) is not None,
+    }
+
+
+# media_type → 原始文件扩展名/MIME（raw 无后缀，Content-Type 靠它推断）
+_RAW_EXT = {
+    "markdown": (".md", "text/markdown; charset=utf-8"),
+    "md": (".md", "text/markdown; charset=utf-8"),
+    "text": (".txt", "text/plain; charset=utf-8"),
+    "txt": (".txt", "text/plain; charset=utf-8"),
+    "html": (".html", "text/html; charset=utf-8"),
+    "htm": (".html", "text/html; charset=utf-8"),
+    "web": (".html", "text/html; charset=utf-8"),
+    "pdf": (".pdf", "application/pdf"),
+    "epub": (".epub", "application/epub+zip"),
+}
+_FALLBACK_MIME = "application/octet-stream"
+
+
+@router.get("/{book_id}/raw-file")
+def book_raw_file(req: Request, book_id: str):
+    """P5-3 原文件查看：返回 archive/raw 不可变副本二进制。
+
+    PDF 用浏览器内置 viewer 直接渲染（iframe / 新标签页）；
+    其余格式按 MIME 内联显示或下载。离线可用，不调 LLM。
+    """
+    state = req.app.state.library
+    book = state.repo.get_book(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="书不存在")
+    raw = _resolve_raw_path(state, book)
+    if raw is None or not raw.exists():
+        raise HTTPException(status_code=404, detail="原始副本不存在（该书未留下不可变副本）")
+
+    mt = (book.get("media_type") or "").lower()
+    ext, mime = _RAW_EXT.get(mt, ("", _FALLBACK_MIME))
+    filename = f"{(book.get('title') or book_id)}{ext}"
+    # inline：浏览器内置 viewer 在 iframe/新标签页直接渲染（attachment 会强制下载）
+    return FileResponse(raw, media_type=mime, filename=filename,
+                        content_disposition_type="inline")

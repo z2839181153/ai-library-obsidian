@@ -14,6 +14,9 @@ const card = ref(null)
 const content = ref([])
 const loading = ref(true)
 const error = ref('')
+const contentSource = ref('')      // P5-3：vault | chunks | raw（离线原文标记）
+const rawAvailable = ref(false)    // P5-3：原始副本存在 → 可查看原文件
+const showRaw = ref(false)         // P5-3：原文件 iframe 模态
 const shelfForm = ref({ floor: '', room: '', shelf: '' })
 const distill = ref(null)      // status 信息
 const distillBusy = ref(false)
@@ -84,6 +87,8 @@ async function load() {
     shelfForm.value.shelf = d.book.suggest_shelf || ''
     const c = await api.bookContent(bookId.value)
     content.value = c.sections || []
+    contentSource.value = c.source || ''
+    rawAvailable.value = !!c.raw_available
     if (d.book.distill_status && d.book.distill_status !== 'idle') {
       try { distill.value = await api.distillStatus(bookId.value) } catch { /* ignore */ }
     }
@@ -330,10 +335,17 @@ const relCls = { same_book: 'rel-book', same_room: 'rel-room', similar: 'rel-sim
               <div v-for="c in card.concepts" :key="c.term" class="muted"><b>{{ c.term }}</b>：{{ c.definition }}</div>
             </div>
           </div>
+          <!-- P5-3：无卡片 = 模型不可用或未生成 → 明示降级，正文照常可读 -->
+          <div v-else class="card mb16 offline-notice">
+            <h3 style="margin:0 0 8px">📇 图书卡片</h3>
+            <p class="muted">⚠️ 模型不可用或尚未生成 —— 卡片/摘要暂缺。<b>正文离线照常可读</b>（阅读不依赖模型）。</p>
+          </div>
 
           <div class="card">
             <h3 style="margin:0 0 8px">📖 原文
+              <span v-if="contentSource === 'raw'" class="badge gold" title="从不可变副本离线读取，无需模型">📦 离线原文</span>
               <span v-if="highlightWords.length" class="hl-hint">高亮：{{ highlightWords.join('、') }}</span>
+              <button v-if="rawAvailable" class="small" style="float:right" @click="showRaw = true">📄 查看原文件</button>
             </h3>
             <div v-if="!content.length" class="empty">暂无正文</div>
             <div ref="contentEl" class="book-content">
@@ -380,6 +392,18 @@ const relCls = { same_book: 'rel-book', same_room: 'rel-room', similar: 'rel-sim
             </div>
           </div>
         </aside>
+      </div>
+
+      <!-- P5-3：原文件查看模态（浏览器内置 viewer 渲染 PDF 等，离线可用） -->
+      <div v-if="showRaw" class="raw-overlay" @click.self="showRaw = false">
+        <div class="raw-modal">
+          <div class="raw-modal-head">
+            <b>📄 原文件：{{ book.title }}</b>
+            <a class="small" :href="`/api/books/${book.book_id}/raw-file`" target="_blank" rel="noopener">新标签页打开 ↗</a>
+            <button class="small" style="margin-left:auto" @click="showRaw = false">✖ 关闭</button>
+          </div>
+          <iframe class="raw-frame" :src="`/api/books/${book.book_id}/raw-file`"></iframe>
+        </div>
       </div>
     </template>
   </div>
@@ -451,6 +475,36 @@ mark.hl {
   padding: 0 2px;
 }
 .hl-hint { font-size: 0.78em; color: var(--gold); margin-left: 8px; }
+
+/* P5-3：离线原文 / 原文件查看 */
+.offline-notice { border: 1px dashed var(--gold); background: #fffdf5; }
+.raw-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.raw-modal {
+  width: min(1000px, 94vw);
+  height: min(86vh, 92vh);
+  background: #fff;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3);
+}
+.raw-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.raw-frame { flex: 1; border: none; width: 100%; background: #f5f5f5; }
 
 .rel-item { padding: 8px 0; border-bottom: 1px dashed var(--border); }
 .rel-item:last-child { border-bottom: none; }
