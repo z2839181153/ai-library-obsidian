@@ -15,7 +15,8 @@ server_log.txt
 server_run*.log
 
 # 个人知识库内容（vault 只放模板/占位，不放真实笔记）
-vault/
+# 注意：排除父目录后无法用 ! 重新包含子文件，需用 vault/* 再白名单
+vault/*
 !vault/README.md
 !vault/schema.md
 
