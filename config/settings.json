@@ -5,7 +5,7 @@
   },
   "paths": {
     "data_dir": "data",
-    "vault_dir": "vault"
+    "vault_dir": "D:\\qwenpaw的工作空间\\ai图书馆\\vault"
   },
   "modelscope": {
     "base_url": "https://api.deepseek.com/v1",

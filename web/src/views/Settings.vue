@@ -19,6 +19,39 @@ const wizardVisible = ref(false)
 const providerInfo = ref(null)     // /api/providers → current 段
 const showAdvanced = ref(false)    // 平铺表单降级为「高级设置」折叠
 
+// P6-2 Obsidian 关联
+const obsidian = ref(null)
+const vaultDir = ref('')
+const copyExisting = ref(false)
+const obsLinking = ref(false)
+const obsOpenMsg = ref('')
+
+async function loadObsidian() {
+  try { obsidian.value = await api.obsidianStatus() } catch { obsidian.value = null }
+}
+async function openObsidian() {
+  obsOpenMsg.value = ''
+  try {
+    const r = await api.obsidianOpen()
+    obsOpenMsg.value = r.message || (r.opened === 'obsidian' ? '已在 Obsidian 中打开 vault' : '已打开 vault 文件夹')
+    store.toast(`📂 ${obsOpenMsg.value}`, 'info')
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+}
+async function linkObsidian() {
+  const v = vaultDir.value.trim()
+  if (!v) { store.toast('请填写 Obsidian vault 目录路径', 'error'); return }
+  obsLinking.value = true
+  try {
+    const r = await api.obsidianLink({ vault_dir: v, copy_existing: copyExisting.value })
+    store.toast(r.message || '✅ 已关联 vault', 'info')
+    vaultDir.value = ''
+    copyExisting.value = false
+    obsidian.value = r.status
+    await loadAll()
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { obsLinking.value = false }
+}
+
 async function loadProviderInfo() {
   try { providerInfo.value = (await api.providers()).current } catch { providerInfo.value = null }
 }
@@ -90,6 +123,7 @@ const form = ref({
 onMounted(async () => {
   await loadAll()
   await loadProviderInfo()
+  await loadObsidian()
 })
 
 async function loadAll() {
@@ -363,6 +397,42 @@ onUnmounted(() => {
           <div class="muted" style="grid-column:1/-1">上次测试连接：{{ fmtTime(providerInfo.last_conn_test) }}</div>
         </div>
         <div v-else class="empty">配置信息加载失败（后端未就绪？）</div>
+      </div>
+
+      <!-- P6-2 Obsidian 关联 -->
+      <div class="card mb16">
+        <div class="row">
+          <h3 style="margin:0">🔗 Obsidian 关联</h3>
+          <span class="spacer"></span>
+          <button class="small primary" @click="openObsidian">📂 在 Obsidian 中打开</button>
+        </div>
+        <div v-if="obsidian" class="mt8" style="font-size:0.9em">
+          <div class="row wrap" style="gap:8px">
+            <code style="word-break:break-all">{{ obsidian.vault_dir }}</code>
+            <span v-if="obsidian.is_obsidian_vault" class="badge">Obsidian vault</span>
+            <span v-if="obsidian.is_managed" class="badge">内置 vault</span>
+            <span :class="['badge', obsidian.obsidian_installed ? '' : 'red']">
+              {{ obsidian.obsidian_installed ? '已安装 Obsidian' : '未安装 Obsidian' }}
+            </span>
+          </div>
+          <p class="muted" style="font-size:0.85em;margin-top:6px">
+            图书馆在 vault 的 <code>books/</code>、<code>catalog/</code>、<code>skills/</code>、<code>pending/</code>
+            子目录存放馆藏，与你的笔记共存、<b>绝不覆盖</b>。切换到任意 Obsidian vault 后正文仍可通过离线副本阅读；
+            已上架书的文件需复制或重新入馆，才能在 Obsidian 里看到。
+          </p>
+          <div class="row wrap" style="gap:8px;margin-top:8px">
+            <input type="text" v-model="vaultDir" placeholder="输入 Obsidian vault 绝对路径（如 D:\MyNotes；目录不存在将自动创建）" class="grow" style="flex:1;min-width:240px" />
+            <label style="display:flex;align-items:center;gap:4px;margin:0" class="muted">
+              <input type="checkbox" v-model="copyExisting" style="width:auto" />
+              复制当前图书馆内容（不覆盖已有文件）
+            </label>
+            <button class="small primary" @click="linkObsidian" :disabled="obsLinking">
+              {{ obsLinking ? '关联中…' : '🔗 关联此 vault' }}
+            </button>
+          </div>
+          <div v-if="obsOpenMsg" class="muted mt8" style="font-size:0.85em">{{ obsOpenMsg }}</div>
+        </div>
+        <div v-else class="empty">Obsidian 状态加载失败（后端未就绪？）</div>
       </div>
 
       <!-- 高级设置（P6-3：平铺表单降级保留） -->

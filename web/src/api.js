@@ -106,4 +106,9 @@ export const api = {
   createShelf: (body) => request('POST', '/api/shelves', body),
   updateShelf: (id, body) => request('PUT', `/api/shelves/${id}`, body),
   deleteShelf: (id) => request('DELETE', `/api/shelves/${id}`),
+
+  // P6-2 Obsidian 关联
+  obsidianStatus: () => request('GET', '/api/obsidian/status'),
+  obsidianLink: (payload) => request('POST', '/api/obsidian/link', payload),
+  obsidianOpen: () => request('POST', '/api/obsidian/open', {}),
 }

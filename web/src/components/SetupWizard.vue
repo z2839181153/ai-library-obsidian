@@ -1,9 +1,11 @@
 <!-- P6-3 配置向导：选供应商 → 选模型 → 填 key（三步傻瓜式）
      P6-4 增加第 4 步：🏢 自定义楼层（可选）——默认 4 标准楼层可增删改名后进入
+     P6-2 增加第 5 步：🔗 Obsidian 关联（可选）——指向任意 Obsidian vault，可复制内容
      全屏遮罩对话框（自定义，不用原生 prompt/confirm）。
      流程：加载预设库（GET /api/providers）→ 供应商卡片 → 模型下拉
            → key 输入 + 测试连接（POST /api/settings/test-connection）
-           → 保存并应用（POST /api/settings/apply-provider）→ 自定义楼层（可跳过） -->
+           → 保存并应用（POST /api/settings/apply-provider）→ 自定义楼层（可跳过）
+           → Obsidian 关联（可跳过） -->
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
@@ -37,6 +39,30 @@ const wzEditValue = ref('')
 const wzAdding = ref(false)        // 新建楼层行
 const wzAddValue = ref('')
 const wzConfirmDel = ref(null)     // 待二次确认删除的 floor_id
+
+// ---- P6-2 第 5 步：Obsidian 关联（可选） ----
+const wzObsidian = ref(null)
+const wzVaultDir = ref('')
+const wzCopy = ref(false)
+const wzLinking = ref(false)
+const wzObsMsg = ref('')
+
+async function loadWzObsidian() {
+  try { wzObsidian.value = await api.obsidianStatus() } catch { wzObsidian.value = null }
+}
+async function linkWzObsidian() {
+  const v = wzVaultDir.value.trim()
+  if (!v) { store.toast('未填写路径，保持当前 vault（可稍后在设置页配置）', 'info'); return }
+  wzLinking.value = true
+  try {
+    const r = await api.obsidianLink({ vault_dir: v, copy_existing: wzCopy.value })
+    store.toast(r.message || '✅ 已关联 vault', 'info')
+    wzVaultDir.value = ''
+    wzObsidian.value = r.status
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { wzLinking.value = false }
+}
+function goStep5() { step.value = 5; loadWzObsidian() }
 
 const curProvider = computed(() => providers.value[selectedProvider.value] || null)
 
@@ -88,6 +114,10 @@ watch(
       wzEditing.value = null
       wzAdding.value = false
       wzConfirmDel.value = null
+      wzObsidian.value = null
+      wzVaultDir.value = ''
+      wzCopy.value = false
+      wzObsMsg.value = ''
       load()
     }
   },
@@ -233,6 +263,8 @@ function finishWizard() { emit('close') }
             <span :class="{ active: step >= 3 }">③ 填 API key</span>
             <span class="wz-arrow">→</span>
             <span :class="{ active: step >= 4 }">④ 自定义楼层 <span class="wz-opt">可选</span></span>
+            <span class="wz-arrow">→</span>
+            <span :class="{ active: step >= 5 }">⑤ Obsidian 关联 <span class="wz-opt">可选</span></span>
           </div>
         </div>
 
@@ -367,6 +399,41 @@ function finishWizard() { emit('close') }
           </div>
           <div class="row mt8" style="justify-content:space-between">
             <button class="small" @click="step = 3">← 上一步</button>
+            <div>
+              <button class="small" @click="goStep5">跳过</button>
+              <button class="small primary" @click="goStep5">下一步：Obsidian 关联 →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 第 5 步（P6-2）：🔗 Obsidian 关联（可选） -->
+        <div v-else-if="step === 5" class="wz-body">
+          <div class="wz-summary">
+            🔗 <b>Obsidian 关联</b>（可选）—— 图书馆可以<b>指向任意 Obsidian vault</b>：
+            馆藏（<code>books/</code> <code>catalog/</code> <code>skills/</code> <code>pending/</code>）作为子目录放入你的笔记库，
+            与已有笔记共存、绝不覆盖。也可稍后在「设置 → Obsidian 关联」再配置。
+          </div>
+          <div v-if="wzObsidian" class="row wrap" style="gap:8px">
+            <span class="muted">当前 vault：</span>
+            <code style="word-break:break-all">{{ wzObsidian.vault_dir }}</code>
+            <span v-if="wzObsidian.is_obsidian_vault" class="badge">Obsidian vault</span>
+            <span v-if="wzObsidian.is_managed" class="badge">内置</span>
+            <span :class="['badge', wzObsidian.obsidian_installed ? '' : 'red']">
+              {{ wzObsidian.obsidian_installed ? '已装 Obsidian' : '未装 Obsidian' }}
+            </span>
+          </div>
+          <div class="row" style="gap:8px;margin-top:10px">
+            <input type="text" v-model="wzVaultDir" placeholder="输入 Obsidian vault 绝对路径（留空 = 保持当前 vault）" class="grow" />
+            <label class="muted" style="display:flex;align-items:center;gap:4px;margin:0">
+              <input type="checkbox" v-model="wzCopy" style="width:auto" /> 复制内容
+            </label>
+            <button class="small primary" @click="linkWzObsidian" :disabled="wzLinking">
+              {{ wzLinking ? '关联中…' : '🔗 关联' }}
+            </button>
+          </div>
+          <div v-if="wzObsMsg" class="muted" style="font-size:0.85em;margin-top:6px">{{ wzObsMsg }}</div>
+          <div class="row mt8" style="justify-content:space-between">
+            <button class="small" @click="step = 4">← 上一步</button>
             <div>
               <button class="small" @click="finishWizard">跳过</button>
               <button class="small primary" @click="finishWizard">🚀 完成，开始使用</button>

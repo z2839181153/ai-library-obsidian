@@ -100,6 +100,15 @@ function openBatch() {
 function onBatchDone() {
   store.refreshDashboard()
 }
+// P6-2：在 Obsidian 中打开 vault（未安装 Obsidian 后端自动降级资源管理器）
+async function openObsidian() {
+  try {
+    const r = await api.obsidianOpen()
+    store.toast(`📂 ${r.message || '已打开 vault'}`, 'info')
+  } catch (e) {
+    store.toast(`❌ ${e.message}`, 'error')
+  }
+}
 async function upload(file) {
   uploading.value = true
   uploadMsg.value = ''
@@ -181,6 +190,7 @@ async function upload(file) {
         <button @click="router.push('/floors')">📚 打开补书室</button>
         <button @click="router.push('/admin')">💬 去提问</button>
         <button @click="router.push('/purchaser')">🛒 采购员</button>
+        <button @click="openObsidian">📂 在 Obsidian 中打开</button>
       </div>
       <div
         class="mt8"
