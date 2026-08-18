@@ -1,8 +1,9 @@
 <!-- P6-3 配置向导：选供应商 → 选模型 → 填 key（三步傻瓜式）
+     P6-4 增加第 4 步：🏢 自定义楼层（可选）——默认 4 标准楼层可增删改名后进入
      全屏遮罩对话框（自定义，不用原生 prompt/confirm）。
      流程：加载预设库（GET /api/providers）→ 供应商卡片 → 模型下拉
            → key 输入 + 测试连接（POST /api/settings/test-connection）
-           → 保存并应用（POST /api/settings/apply-provider） -->
+           → 保存并应用（POST /api/settings/apply-provider）→ 自定义楼层（可跳过） -->
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
@@ -28,6 +29,14 @@ const testing = ref(false)
 const applying = ref(false)
 const testResults = ref(null)
 const loaded = ref(false)
+
+// ---- P6-4 第 4 步：自定义楼层（可选） ----
+const wizardFloors = ref([])       // GET /api/floors → floors
+const wzEditing = ref(null)        // { id, name } 内联改名
+const wzEditValue = ref('')
+const wzAdding = ref(false)        // 新建楼层行
+const wzAddValue = ref('')
+const wzConfirmDel = ref(null)     // 待二次确认删除的 floor_id
 
 const curProvider = computed(() => providers.value[selectedProvider.value] || null)
 
@@ -75,6 +84,10 @@ watch(
       testResults.value = null
       apiKey.value = ''
       embedApiKey.value = ''
+      wizardFloors.value = []
+      wzEditing.value = null
+      wzAdding.value = false
+      wzConfirmDel.value = null
       load()
     }
   },
@@ -148,13 +161,62 @@ async function apply() {
     const s = await api.applyProvider(payload)
     store.toast(`✅ 配置已保存（${p.name}）`, 'info')
     emit('applied', s)
-    emit('close')
+    // P6-4：保存成功后进入「自定义楼层」可选步骤（可跳过）
+    step.value = 4
+    loadWizardFloors()
   } catch (e) {
     store.toast(`❌ ${e.message}`, 'error')
   } finally {
     applying.value = false
   }
 }
+
+// ---- P6-4 自定义楼层操作 ----
+async function loadWizardFloors() {
+  try { wizardFloors.value = (await api.floors()).floors || [] } catch { wizardFloors.value = [] }
+}
+function startWzEdit(f) {
+  wzEditing.value = { id: f.floor_id, name: f.name }
+  wzEditValue.value = f.name
+}
+function cancelWzEdit() { wzEditing.value = null; wzEditValue.value = '' }
+async function saveWzEdit() {
+  const name = wzEditValue.value.trim()
+  const ed = wzEditing.value
+  if (!ed || !name) { cancelWzEdit(); return }
+  try {
+    await api.updateFloor(ed.id, { name })
+    store.toast('✅ 已改名', 'info')
+    await loadWizardFloors()
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { cancelWzEdit() }
+}
+function toggleWzAdd() {
+  wzAdding.value = !wzAdding.value
+  if (wzAdding.value) wzAddValue.value = ''
+}
+function cancelWzAdd() { wzAdding.value = false; wzAddValue.value = '' }
+async function confirmWzAdd() {
+  const name = wzAddValue.value.trim()
+  if (!name) return
+  try {
+    await api.createFloor({ name })
+    store.toast('✅ 已新建楼层', 'info')
+    await loadWizardFloors()
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { cancelWzAdd() }
+}
+function askWzDel(f) { wzConfirmDel.value = f.floor_id }
+function cancelWzDel() { wzConfirmDel.value = null }
+async function confirmWzDel(f) {
+  try {
+    await api.deleteFloor(f.floor_id)
+    store.toast('✅ 已删除楼层', 'info')
+    await loadWizardFloors()
+  } catch (e) { store.toast(`❌ ${e.message}`, 'error') }
+  finally { cancelWzDel() }
+}
+function finishWizard() { emit('close') }
 </script>
 
 <template>
@@ -169,6 +231,8 @@ async function apply() {
             <span :class="{ active: step >= 2 }">② 选模型</span>
             <span class="wz-arrow">→</span>
             <span :class="{ active: step >= 3 }">③ 填 API key</span>
+            <span class="wz-arrow">→</span>
+            <span :class="{ active: step >= 4 }">④ 自定义楼层 <span class="wz-opt">可选</span></span>
           </div>
         </div>
 
@@ -222,7 +286,7 @@ async function apply() {
         </div>
 
         <!-- 第 3 步：填 key + 测试 -->
-        <div v-else class="wz-body">
+        <div v-else-if="step === 3" class="wz-body">
           <div class="wz-summary">
             已选：{{ curProvider?.logo }} <b>{{ curProvider?.name }}</b> ·
             <code>{{ chatModel }}</code><span v-if="embedModel"> + <code>{{ embedModel }}</code></span>
@@ -265,6 +329,50 @@ async function apply() {
             <button class="small" @click="close">关闭</button>
           </div>
         </div>
+
+        <!-- 第 4 步（P6-4）：🏢 自定义楼层（可选） -->
+        <div v-else-if="step === 4" class="wz-body">
+          <div class="wz-summary">
+            🏢 <b>自定义楼层</b>（可选）—— 楼层按<b>来源媒介</b>组织藏书（如 电子书 / 网页公众号 / 聊天记录 / 视频转写）。
+            可增删改名后再进入；之后也随时可在「设置 → 楼层编辑」修改。
+          </div>
+          <div class="row wz-floor-head">
+            <b>当前楼层</b>
+            <span class="spacer"></span>
+            <button class="small primary" @click="toggleWzAdd">＋ 新建楼层</button>
+          </div>
+          <div v-if="wzAdding" class="wz-floor row">
+            <input type="text" v-model="wzAddValue" placeholder="新楼层名称（如：扫描件）" class="grow"
+                   @keyup.enter="confirmWzAdd" @keyup.esc="cancelWzAdd" autofocus />
+            <button class="small primary" @click="confirmWzAdd">创建</button>
+            <button class="small" @click="cancelWzAdd">取消</button>
+          </div>
+          <div v-for="f in wizardFloors" :key="f.floor_id" class="wz-floor row">
+            <b class="wz-code">{{ f.code }}</b>
+            <template v-if="wzEditing && wzEditing.id === f.floor_id">
+              <input type="text" v-model="wzEditValue" class="grow"
+                     @keyup.enter="saveWzEdit" @keyup.esc="cancelWzEdit" autofocus />
+              <button class="small primary" @click="saveWzEdit">✓ 保存</button>
+              <button class="small" @click="cancelWzEdit">✗</button>
+            </template>
+            <template v-else>
+              <span class="grow wz-floor-name">{{ f.name }}</span>
+              <button class="small" @click="startWzEdit(f)">改名</button>
+              <button v-if="wzConfirmDel === f.floor_id" class="small danger" @click="confirmWzDel(f)">确认删除？</button>
+              <button v-else class="small danger" @click="askWzDel(f)">删除</button>
+            </template>
+          </div>
+          <div class="muted" style="font-size:0.85em;margin-top:8px">
+            提示：有书的楼层不能删除；房间/书架等更细层级在设置页管理。
+          </div>
+          <div class="row mt8" style="justify-content:space-between">
+            <button class="small" @click="step = 3">← 上一步</button>
+            <div>
+              <button class="small" @click="finishWizard">跳过</button>
+              <button class="small primary" @click="finishWizard">🚀 完成，开始使用</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -286,7 +394,19 @@ async function apply() {
 .wz-title { font-weight: 700; font-size: 1.1em; margin-bottom: 10px; }
 .wz-steps { display: flex; gap: 6px; align-items: center; font-size: 0.9em; color: var(--ink-soft, #888); }
 .wz-steps .active { color: var(--accent, #3d5a45); font-weight: 700; }
+.wz-opt {
+  font-size: 0.75em; font-weight: 400; color: var(--ink-soft, #999);
+  border: 1px solid var(--border, #ccc); border-radius: 8px; padding: 0 5px; margin-left: 2px;
+}
 .wz-arrow { color: #bbb; }
+.wz-floor-head { margin: 4px 0 6px; }
+.wz-floor {
+  border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 6px 10px;
+  margin-top: 6px; background: var(--bg-soft, #f7f7f4);
+}
+.wz-floor input { border: 1px solid var(--border, #ccc); border-radius: 6px; padding: 4px 8px; }
+.wz-code { min-width: 34px; margin-right: 8px; color: var(--ink-soft, #666); }
+.wz-floor-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wz-body { padding: 16px 20px 20px; }
 .wz-provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
 .wz-provider {
