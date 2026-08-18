@@ -4,6 +4,7 @@ import echarts from '../echarts'
 import { api } from '../api'
 import { useLibraryStore } from '../stores/library'
 import ModalDialog from '../components/ModalDialog.vue'
+import SetupWizard from '../components/SetupWizard.vue'
 
 const store = useLibraryStore()
 
@@ -12,6 +13,22 @@ const settings = ref(null)
 const saving = ref(false)
 const savedMsg = ref('')
 const floors = ref([])
+
+// P6-3 配置向导
+const wizardVisible = ref(false)
+const providerInfo = ref(null)     // /api/providers → current 段
+const showAdvanced = ref(false)    // 平铺表单降级为「高级设置」折叠
+
+async function loadProviderInfo() {
+  try { providerInfo.value = (await api.providers()).current } catch { providerInfo.value = null }
+}
+function openWizard() { wizardVisible.value = true }
+function onWizardApplied() { loadProviderInfo(); loadAll() }
+function fmtTime(iso) {
+  if (!iso) return '从未测试'
+  const d = new Date(iso)
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
 
 // 技能审阅
 const skills = ref([])
@@ -72,6 +89,7 @@ const form = ref({
 
 onMounted(async () => {
   await loadAll()
+  await loadProviderInfo()
 })
 
 async function loadAll() {
@@ -320,9 +338,42 @@ onUnmounted(() => {
 
     <!-- 基础设置 -->
     <template v-if="tab === 'general'">
+      <!-- P6-3 当前生效配置健康卡 -->
       <div class="card mb16">
-        <h3 style="margin:0 0 8px">🔌 API 配置</h3>
-        <div class="grid grid-half">
+        <div class="row">
+          <h3 style="margin:0">🩺 当前生效配置</h3>
+          <span class="spacer"></span>
+          <button class="small primary" @click="openWizard">⚙️ 打开配置向导</button>
+        </div>
+        <div v-if="providerInfo" class="grid grid-half mt8" style="font-size:0.9em">
+          <div>
+            <span class="muted">供应商：</span>
+            <b>{{ providerInfo.provider?.name || '自定义' }}</b>
+            <span class="muted" style="margin-left:6px">{{ providerInfo.base_url }}</span>
+          </div>
+          <div><span class="muted">聊天 / 蒸馏：</span><b>{{ providerInfo.chat_model }}</b> / {{ providerInfo.distill_model }}</div>
+          <div><span class="muted">嵌入：</span><b>{{ providerInfo.embed_model }}</b> <span class="muted">（{{ providerInfo.embed_base_url }}）</span></div>
+          <div>
+            <span class="muted">key：</span>
+            <span class="badge" :class="{ red: !providerInfo.chat_key_set }">
+              {{ providerInfo.chat_key_set ? `已配置 ${providerInfo.chat_key_masked}` : '未配置' }}
+            </span>
+            <span v-if="providerInfo.ollama_enabled" class="badge">Ollama 本地已启用</span>
+          </div>
+          <div class="muted" style="grid-column:1/-1">上次测试连接：{{ fmtTime(providerInfo.last_conn_test) }}</div>
+        </div>
+        <div v-else class="empty">配置信息加载失败（后端未就绪？）</div>
+      </div>
+
+      <!-- 高级设置（P6-3：平铺表单降级保留） -->
+      <div class="card mb16">
+        <div class="row" style="cursor:pointer" @click="showAdvanced = !showAdvanced">
+          <h3 style="margin:0">🔧 高级设置 <span class="muted" style="font-weight:400;font-size:0.85em">（平铺表单，一般用上方向导即可）</span></h3>
+          <span class="spacer"></span>
+          <span class="muted">{{ showAdvanced ? '▲ 收起' : '▼ 展开' }}</span>
+        </div>
+        <template v-if="showAdvanced">
+        <div class="grid grid-half" style="margin-top:10px">
           <label class="muted">ModelScope base_url
             <input type="text" v-model="form.modelscope.base_url" />
           </label>
@@ -348,6 +399,7 @@ onUnmounted(() => {
             <input type="text" v-model="form.ollama.model" />
           </label>
         </div>
+        </template>
       </div>
 
       <div class="card mb16">
@@ -592,5 +644,8 @@ onUnmounted(() => {
       @confirm="onDialogConfirm"
       @cancel="onDialogCancel"
     />
+
+    <!-- P6-3 配置向导（三步） -->
+    <SetupWizard :visible="wizardVisible" @close="wizardVisible = false" @applied="onWizardApplied" />
   </div>
 </template>

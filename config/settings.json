@@ -33,5 +33,6 @@
   },
   "purchase": {
     "max_daily_purchase": 7
-  }
+  },
+  "last_conn_test": "2026-08-15T18:44:31+08:00"
 }

@@ -1,12 +1,21 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useLibraryStore } from './stores/library'
+import { api } from './api'
+import SetupWizard from './components/SetupWizard.vue'
 
 const store = useLibraryStore()
 
-onMounted(() => {
+// P6-3 首次启动配置向导：未配置 key 且未启用 Ollama → 自动弹出
+const wizardVisible = ref(false)
+
+onMounted(async () => {
   store.refreshDashboard()
   store.connectWS()
+  try {
+    const d = await api.providers()
+    if (d.needs_setup) wizardVisible.value = true
+  } catch { /* 后端未就绪，忽略（设置页可手动打开） */ }
 })
 onUnmounted(() => {
   if (store.ws) store.ws.close()
@@ -46,5 +55,8 @@ onUnmounted(() => {
         {{ t.text }}
       </div>
     </div>
+
+    <!-- P6-3 首次启动配置向导 -->
+    <SetupWizard :visible="wizardVisible" @close="wizardVisible = false" @applied="wizardVisible = false" />
   </div>
 </template>

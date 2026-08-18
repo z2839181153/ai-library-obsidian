@@ -93,6 +93,10 @@ export const api = {
     request('GET', `/api/daily-reports${date ? '?date=' + date : ''}`),
   settings: () => request('GET', '/api/settings'),
   saveSettings: (patch) => request('PUT', '/api/settings', patch),
+  providers: () => request('GET', '/api/providers'),
+  applyProvider: (payload) => request('POST', '/api/settings/apply-provider', payload),
+  testConnection: (payload, opts = {}) =>
+    request('POST', '/api/settings/test-connection', payload, false, { timeout: 45000, ...opts }),
   createFloor: (body) => request('POST', '/api/floors', body),
   updateFloor: (id, body) => request('PUT', `/api/floors/${id}`, body),
   deleteFloor: (id) => request('DELETE', `/api/floors/${id}`),
